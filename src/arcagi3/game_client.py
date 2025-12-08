@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 
 class GameClient:
     """Client for interacting with the ARC-AGI-3 API"""
-    
-    ROOT_URL = "https://three.arcprize.org"
+
+    ROOT_URL: str = "https://three.arcprize.org"
     
     def __init__(self, api_key: Optional[str] = None, max_retries: int = 3):
         """
@@ -29,6 +29,8 @@ class GameClient:
             api_key: ARC API key. If not provided, reads from ARC_API_KEY env var.
             max_retries: Maximum number of retry attempts for API calls.
         """
+        self.ROOT_URL = os.getenv("ARC_URL_BASE", self.ROOT_URL)
+
         self.api_key = api_key or os.getenv("ARC_API_KEY")
         if not self.api_key:
             raise ValueError("ARC_API_KEY not found in environment or parameters")
