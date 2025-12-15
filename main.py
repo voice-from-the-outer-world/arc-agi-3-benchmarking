@@ -14,10 +14,6 @@ from dotenv import load_dotenv
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
-from arcagi3.agent import MultimodalAgent
-from arcagi3.game_client import GameClient
-from arcagi3.utils import read_models_config, save_result, generate_scorecard_tags
-from arcagi3.schemas import GameResult
 
 from arcagi3.utils.cli import configure_logging, validate_args, handle_list_checkpoints, handle_close_scorecard, configure_args, configure_main_args, print_result, apply_env_vars_to_args
 from arcagi3.arc3tester import ARC3Tester
@@ -74,6 +70,7 @@ def main_cli(cli_args: Optional[list] = None):
         checkpoint_frequency=args.checkpoint_frequency,
         close_on_exit=args.close_on_exit,
         memory_word_limit=args.memory_limit,
+        submit_scorecard=not getattr(args, "no_scorecard_submission", False),
     )
 
     # Play game (with checkpoint support)

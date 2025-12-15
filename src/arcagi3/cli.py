@@ -19,7 +19,7 @@ import sys
 import os
 import argparse
 import logging
-from typing import List, Optional
+from typing import Optional
 from dotenv import load_dotenv
 from arcagi3.utils.cli import configure_logging, list_available_games, configure_args, configure_cli_args, handle_list_games, run_batch_games
 
@@ -28,7 +28,6 @@ parent_dir = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-from arcagi3.arc3tester import ARC3Tester
 from arcagi3.game_client import GameClient
 
 
@@ -100,6 +99,7 @@ def main_cli(cli_args: Optional[list] = None):
         checkpoint_frequency=args.checkpoint_frequency,
         close_on_exit=args.close_on_exit,
         use_vision=args.use_vision,
+        submit_scorecard=not getattr(args, "no_scorecard_submission", False),
     )
 
 
