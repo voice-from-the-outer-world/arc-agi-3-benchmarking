@@ -1,19 +1,34 @@
 import logging
+import traceback
+import uuid
 from typing import Optional
-from arcagi3.utils import read_models_config
-from arcagi3.game_client import GameClient
-from arcagi3.utils import generate_scorecard_tags
+
 from arcagi3.agent import MultimodalAgent
 from arcagi3.checkpoint import CheckpointManager
-from arcagi3.schemas import GameResult
-from arcagi3.utils import save_result
-import uuid
+from arcagi3.game_client import GameClient
+from arcagi3.schemas import GameResult, GameStep
+from arcagi3.utils import errors, generate_scorecard_tags, read_models_config, save_result
+from arcagi3.utils.context import SessionContext
 
 logger = logging.getLogger(__name__)
 
+
+class DefaultTesterAgent(MultimodalAgent):
+    """
+    Minimal concrete agent used by ARC3Tester.
+
+    ARC3Tester is primarily orchestration (scorecard + checkpoint + running loops).
+    This default agent picks ACTION1 unconditionally; real usage should supply a
+    custom agent implementation elsewhere.
+    """
+
+    def step(self, context: SessionContext) -> GameStep:
+        return GameStep(action={"action": "ACTION1"}, reasoning={"agent": "default"})
+
+
 class ARC3Tester:
     """Main tester class for running ARC-AGI-3 games"""
-    
+
     def __init__(
         self,
         config: str,
@@ -30,6 +45,8 @@ class ARC3Tester:
         close_on_exit: bool = False,
         memory_word_limit: Optional[int] = None,
         submit_scorecard: bool = True,
+        agent_class: Optional[type] = None,
+        agent_kwargs: Optional[dict] = None,
     ):
         """
         Initialize the tester.
@@ -48,8 +65,11 @@ class ARC3Tester:
             checkpoint_frequency: Save checkpoint every N actions (default: 1, 0 to disable)
             close_on_exit: Close scorecard on exit even if not won (prevents checkpoint resume)
             memory_word_limit: Memory scratchpad word limit (overrides model config, default: from config or 500)
+            agent_class: Optional agent class to use instead of DefaultTesterAgent
         """
         self.config = config
+        self.agent_class = agent_class or DefaultTesterAgent
+        self.agent_kwargs = agent_kwargs or {}
         self.model_config = read_models_config(config)
         self.save_results_dir = save_results_dir
         self.overwrite_results = overwrite_results
@@ -62,21 +82,25 @@ class ARC3Tester:
         self.checkpoint_frequency = checkpoint_frequency
         self.close_on_exit = close_on_exit
         self.submit_scorecard = submit_scorecard
-        
+
         # Determine memory limit: CLI > Config > Default (500)
         if memory_word_limit is not None:
             self.memory_word_limit = memory_word_limit
         else:
             # Check if defined in model config kwargs
             self.memory_word_limit = self.model_config.kwargs.get("memory_word_limit", 500)
-            
+
         # Initialize game client
         self.game_client = GameClient(max_retries=api_retries)
-        
+
         logger.info(f"Initialized ARC3Tester with config: {config}")
-        logger.info(f"Model: {self.model_config.model_name}, Provider: {self.model_config.provider}")
-    
-    def play_game(self, game_id: str, card_id: Optional[str] = None, resume_from_checkpoint: bool = False) -> GameResult:
+        logger.info(
+            f"Model: {self.model_config.model_name}, Provider: {self.model_config.provider}"
+        )
+
+    def play_game(
+        self, game_id: str, card_id: Optional[str] = None, resume_from_checkpoint: bool = False
+    ) -> GameResult:
         """
         Play a single game.
 
@@ -152,65 +176,70 @@ class ARC3Tester:
                     [game_id], card_id=card_id, tags=tags
                 )
                 card_id = scorecard_response.get("card_id", card_id)
-        
-        
+
         try:
-            from arcagi3.utils import load_hints, find_hints_file
-            
+            from arcagi3.utils import find_hints_file, load_hints
+
             hints_file = find_hints_file()
             hint_found = False
             if hints_file:
                 hints = load_hints(hints_file, game_id=game_id)
                 hint_found = game_id in hints
-            
+
             if hint_found:
                 logger.info(f"✓ Hint found for game {game_id}")
             else:
                 logger.debug(f"⊘ No hint found for game {game_id}")
-            
+
             # Create agent
             # Use checkpoint_card_id for checkpoint management if resuming, otherwise use card_id
-            agent = MultimodalAgent(
-                config=self.config,
-                game_client=self.game_client,
-                card_id=card_id,
-                max_actions=self.max_actions,
-                retry_attempts=self.retry_attempts,
-                num_plays=self.num_plays,
-                max_episode_actions=self.max_episode_actions,
-                show_images=self.show_images,
-                use_vision=self.use_vision,
-                checkpoint_frequency=self.checkpoint_frequency,
-                checkpoint_card_id=checkpoint_card_id,
-                memory_word_limit=self.memory_word_limit,
-            )
+            agent_kwargs = {
+                "config": self.config,
+                "game_client": self.game_client,
+                "card_id": card_id,
+                "max_actions": self.max_actions,
+                "num_plays": self.num_plays,
+                "max_episode_actions": self.max_episode_actions,
+                "checkpoint_frequency": self.checkpoint_frequency,
+            }
+            # Add agent-specific kwargs if using ADCRAgent or similar
+            if self.agent_class != DefaultTesterAgent:
+                agent_kwargs.update(
+                    {
+                        "use_vision": self.use_vision,
+                        "show_images": self.show_images,
+                        "memory_word_limit": self.memory_word_limit,
+                    }
+                )
+            if self.agent_kwargs:
+                agent_kwargs.update(self.agent_kwargs)
+            agent = self.agent_class(**agent_kwargs)
 
             # Play game (with checkpoint support)
-            result = agent.play_game(game_id, resume_from_checkpoint=resume_from_checkpoint)
-            
+            checkpoint_id = checkpoint_card_id if checkpoint_card_id else card_id
+            result = agent.play_game(
+                game_id,
+                resume_from_checkpoint=resume_from_checkpoint,
+                checkpoint_id=checkpoint_id,
+            )
+
             # Save result if directory provided
             if self.save_results_dir:
                 result_file = save_result(self.save_results_dir, result)
                 logger.info(f"Saved result to {result_file}")
-            
+
             # Determine the actual checkpoint card_id for logging
             actual_checkpoint_id = checkpoint_card_id if checkpoint_card_id else card_id
 
-            # Determine whether we should close the scorecard. When no card_id
-            # existed initially and submit_scorecard is False, we never opened a
+            # Close the scorecard immediately when the game ends.
+            # When no card_id existed initially and submit_scorecard is False, we never opened a
             # scorecard, so there is nothing to close.
             if self.submit_scorecard or checkpoint_card_id or not card_id.startswith("local-"):
-                if result.final_state == "WIN" or self.close_on_exit:
-                    try:
-                        self.game_client.close_scorecard(card_id)
-                        logger.info(f"Closed scorecard {card_id}")
-                    except Exception as e:
-                        logger.debug(f"Could not close scorecard: {e}")
-                else:
-                    logger.info(
-                        f"Scorecard {card_id} left open for potential checkpoint resume"
-                    )
-                    logger.info(f"Checkpoint saved at: .checkpoint/{actual_checkpoint_id}")
+                try:
+                    self.game_client.close_scorecard(card_id)
+                    logger.info(f"Closed scorecard {card_id}")
+                except Exception as e:
+                    logger.debug(f"Could not close scorecard: {e}")
             else:
                 logger.info(
                     f"Local-only run completed; no scorecard was opened. "
@@ -229,6 +258,28 @@ class ARC3Tester:
         except Exception as e:
             # Determine the actual checkpoint card_id for logging
             actual_checkpoint_id = checkpoint_card_id if checkpoint_card_id else card_id
-            logger.error(f"Error during game execution: {e}")
+            trace = traceback.format_exc()
+            payload = errors.build_error_payload(
+                e,
+                context={
+                    "game_id": game_id,
+                    "config": self.config,
+                    "card_id": card_id,
+                    "checkpoint_id": actual_checkpoint_id,
+                    "phase": "play_game",
+                },
+                trace=trace,
+            )
+            if not getattr(e, "_friendly_logged", False):
+                logger.error(errors.format_user_message(payload))
+                logger.error("Traceback:\n%s", trace)
+                setattr(e, "_friendly_logged", True)
+
+            if actual_checkpoint_id:
+                try:
+                    CheckpointManager(actual_checkpoint_id).write_error(payload)
+                except Exception as write_error:
+                    logger.warning(f"Failed to write error checkpoint: {write_error}")
+
             logger.info(f"Checkpoint may be available at: .checkpoint/{actual_checkpoint_id}")
             raise

@@ -1,37 +1,50 @@
-
 import logging
 import os
-import threading
-from pathlib import Path
-from datetime import datetime
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import re
+from typing import Any, Dict, List, Optional
+
+import yaml
+
 from arcagi3.checkpoint import CheckpointManager
 from arcagi3.game_client import GameClient
-from typing import List, Optional, Tuple
-from arcagi3.arc3tester import ARC3Tester
-from arcagi3.schemas import GameResult
+from arcagi3.utils.api_tests import (
+    test_anthropic,
+    test_arc_api_key,
+    test_deepseek,
+    test_fireworks,
+    test_gemini,
+    test_groq,
+    test_huggingface,
+    test_openai,
+    test_openrouter,
+    test_provider_api_key,
+    test_xai,
+)
 
 logger = logging.getLogger(__name__)
 
-# Thread-local storage for game ID
-_thread_local = threading.local()
+_GAME_ID_WITH_HASH_RE = re.compile(r"^(?P<base>[a-zA-Z]{2}\d{2})-[0-9a-fA-F]{7,40}$")
 
 # ============================================================================
 # CLI Arguments
 # ============================================================================
 
+
 def _bool_env(env_var: str, default: str = "false") -> bool:
     """Helper to parse boolean environment variable."""
     return os.getenv(env_var, default).lower() in ("true", "1", "yes")
+
 
 def _int_env(env_var: str, default: int) -> int:
     """Helper to parse integer environment variable."""
     val = os.getenv(env_var)
     return int(val) if val else default
 
+
 def _str_env(env_var: str, default: str = None) -> str:
     """Helper to parse string environment variable."""
     return os.getenv(env_var, default)
+
 
 def configure_args(parser):
     # Configuration
@@ -39,114 +52,115 @@ def configure_args(parser):
         "--config",
         type=str,
         default=_str_env("CONFIG"),
-        help="Model configuration name from models.yml. Not required when using --checkpoint. Can be set via CONFIG env var."
+        help="Model configuration name from models.yml. Not required when using --checkpoint. Can be set via CONFIG env var.",
     )
     parser.add_argument(
         "--save_results_dir",
         type=str,
         default=_str_env("SAVE_RESULTS_DIR"),
-        help="Directory to save results (default: results/<config>). Can be set via SAVE_RESULTS_DIR env var."
+        help="Directory to save results (default: results/<config>). Can be set via SAVE_RESULTS_DIR env var.",
     )
     parser.add_argument(
         "--overwrite_results",
         action="store_true",
-        help="Overwrite existing result files. Can be set via OVERWRITE_RESULTS env var (true/1/yes)."
+        help="Overwrite existing result files. Can be set via OVERWRITE_RESULTS env var (true/1/yes).",
     )
     parser.add_argument(
         "--max_actions",
         type=int,
         default=_int_env("MAX_ACTIONS", 40),
-        help="Maximum actions for entire run across all games/plays (default: 40, 0 = no limit). Can be set via MAX_ACTIONS env var."
+        help="Maximum actions for entire run across all games/plays (default: 40, 0 = no limit). Can be set via MAX_ACTIONS env var.",
     )
     parser.add_argument(
         "--retry_attempts",
         type=int,
         default=_int_env("RETRY_ATTEMPTS", 3),
-        help="Number of retry attempts for API failures (default: 3). Can be set via RETRY_ATTEMPTS env var."
+        help="Number of retry attempts for API failures (default: 3). Can be set via RETRY_ATTEMPTS env var.",
     )
     parser.add_argument(
         "--retries",
         type=int,
         default=_int_env("RETRIES", 3),
-        help="Number of retry attempts for ARC-AGI-3 API calls (default: 3). Can be set via RETRIES env var."
+        help="Number of retry attempts for ARC-AGI-3 API calls (default: 3). Can be set via RETRIES env var.",
     )
     parser.add_argument(
         "--num_plays",
         type=int,
         default=_int_env("NUM_PLAYS", 0),
-        help="Number of times to play each game (0 = infinite, default: 0, continues session with memory on subsequent plays). Can be set via NUM_PLAYS env var."
+        help="Number of times to play each game (0 = infinite, default: 0, continues session with memory on subsequent plays). Can be set via NUM_PLAYS env var.",
     )
     parser.add_argument(
         "--max_episode_actions",
         type=int,
         default=_int_env("MAX_EPISODE_ACTIONS", 0),
-        help="Maximum actions per game/episode (default: 0 = no limit). Can be set via MAX_EPISODE_ACTIONS env var."
+        help="Maximum actions per game/episode (default: 0 = no limit). Can be set via MAX_EPISODE_ACTIONS env var.",
     )
 
     # Display
     parser.add_argument(
         "--show-images",
         action="store_true",
-        help="Display game frames in the terminal. Can be set via SHOW_IMAGES env var (true/1/yes)."
+        help="Display game frames in the terminal. Can be set via SHOW_IMAGES env var (true/1/yes).",
     )
     parser.add_argument(
         "--log-level",
         type=str,
         default=_str_env("LOG_LEVEL", "INFO"),
         choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        help="Set the logging level (default: INFO). Can be set via LOG_LEVEL env var."
+        help="Set the logging level (default: INFO). Can be set via LOG_LEVEL env var.",
     )
     parser.add_argument(
         "--verbose",
         action="store_true",
-        help="Enable verbose output (DEBUG level for app, WARNING for libraries). Can be set via VERBOSE env var (true/1/yes)."
+        help="Enable verbose output (DEBUG level for app, WARNING for libraries). Can be set via VERBOSE env var (true/1/yes).",
     )
     parser.add_argument(
         "--memory-limit",
         type=int,
         default=int(os.getenv("MEMORY_LIMIT")) if os.getenv("MEMORY_LIMIT") else None,
-        help="Maximum number of words allowed in memory scratchpad (overrides model config). Can be set via MEMORY_LIMIT env var."
+        help="Maximum number of words allowed in memory scratchpad (overrides model config). Can be set via MEMORY_LIMIT env var.",
     )
     parser.add_argument(
         "--use_vision",
         action="store_true",
-        help="Use vision to play the game (default: True). Can be set via USE_VISION env var (true/1/yes)."
+        help="Use vision to play the game (default: True). Can be set via USE_VISION env var (true/1/yes).",
     )
     parser.add_argument(
         "--checkpoint-frequency",
         type=int,
         default=_int_env("CHECKPOINT_FREQUENCY", 1),
-        help="Save checkpoint every N actions (default: 1, 0 to disable periodic checkpoints). Can be set via CHECKPOINT_FREQUENCY env var."
+        help="Save checkpoint every N actions (default: 1, 0 to disable periodic checkpoints). Can be set via CHECKPOINT_FREQUENCY env var.",
     )
     parser.add_argument(
         "--close-on-exit",
         action="store_true",
-        help="Close scorecard on exit even if game not won (prevents checkpoint resume). Can be set via CLOSE_ON_EXIT env var (true/1/yes)."
+        help="Close scorecard on exit even if game not won (prevents checkpoint resume). Can be set via CLOSE_ON_EXIT env var (true/1/yes).",
     )
     parser.add_argument(
-        "--no-scorecard-submission",
+        "--offline",
         action="store_true",
-        help="Do not open or close scorecards on the ARC server; run in local-only mode when no existing card_id is provided."
+        help="Run in offline mode: no scoredcards are created on the ARC server; run in local-only mode when no existing card_id is provided. Can be set via OFFLINE env var (true/1/yes).",
     )
 
-def configure_cli_args(parser):
-    # Game selection (mutually exclusive)
-    game_group = parser.add_mutually_exclusive_group(required=False)
-    game_group.add_argument(
-        "--games",
+    # Breakpoints
+    parser.add_argument(
+        "--breakpoints",
+        action="store_true",
+        help="Enable breakpoint UI integration. Can be set via BREAKPOINTS_ENABLED env var (true/1/yes).",
+    )
+    parser.add_argument(
+        "--breakpoint-ws-url",
         type=str,
-        help="Comma-separated list of game IDs"
+        default=_str_env("BREAKPOINT_WS_URL", "ws://localhost:8765/ws"),
+        help="WebSocket URL for breakpoint server (default: ws://localhost:8765/ws). Can be set via BREAKPOINT_WS_URL env var.",
     )
-    game_group.add_argument(
-        "--all-games",
-        action="store_true",
-        help="Run all available games from the API"
+    parser.add_argument(
+        "--breakpoint-schema",
+        type=str,
+        default=_str_env("BREAKPOINT_SCHEMA"),
+        help="Path to breakpoint schema JSON file. Can be set via BREAKPOINT_SCHEMA env var.",
     )
-    game_group.add_argument(
-        "--list-games",
-        action="store_true",
-        help="List all available games and exit"
-    )
+
 
 def configure_main_args(parser):
     # Checkpoint options
@@ -156,31 +170,33 @@ def configure_main_args(parser):
         type=str,
         metavar="CARD_ID",
         default=_str_env("CHECKPOINT"),
-        help="Resume from existing checkpoint using the specified scorecard ID. Can be set via CHECKPOINT env var."
+        help="Resume from existing checkpoint using the specified scorecard ID. Can be set via CHECKPOINT env var.",
     )
     checkpoint_group.add_argument(
         "--list-checkpoints",
         action="store_true",
-        help="List all available checkpoints and exit. Can be set via LIST_CHECKPOINTS env var (true/1/yes)."
+        help="List all available checkpoints and exit. Can be set via LIST_CHECKPOINTS env var (true/1/yes).",
     )
     checkpoint_group.add_argument(
         "--close-scorecard",
         type=str,
         metavar="CARD_ID",
         default=_str_env("CLOSE_SCORECARD"),
-        help="Close a scorecard by ID and exit. Can be set via CLOSE_SCORECARD env var."
+        help="Close a scorecard by ID and exit. Can be set via CLOSE_SCORECARD env var.",
     )
 
     parser.add_argument(
         "--game_id",
         type=str,
         default=_str_env("GAME_ID"),
-        help="Game ID to play (e.g., 'ls20-016295f7601e'). Not required when using --checkpoint. Can be set via GAME_ID env var."
+        help="Game ID to play (e.g., 'ls20-016295f7601e'). Not required when using --checkpoint. Can be set via GAME_ID env var.",
     )
+
 
 # ============================================================================
 # CLI Configurers
 # ============================================================================
+
 
 def apply_env_vars_to_args(args):
     """
@@ -203,10 +219,15 @@ def apply_env_vars_to_args(args):
         args.use_vision = True
     if os.getenv("CLOSE_ON_EXIT"):
         args.close_on_exit = _bool_env("CLOSE_ON_EXIT")
+    if os.getenv("OFFLINE"):
+        args.offline = _bool_env("OFFLINE")
     if os.getenv("LIST_CHECKPOINTS"):
         args.list_checkpoints = _bool_env("LIST_CHECKPOINTS")
-    
+    if os.getenv("BREAKPOINTS_ENABLED"):
+        args.breakpoints = _bool_env("BREAKPOINTS_ENABLED")
+
     return args
+
 
 def validate_args(args, parser):
     if args.checkpoint:
@@ -229,37 +250,45 @@ def validate_args(args, parser):
         if not args.game_id or not args.config:
             parser.error("--game_id and --config are required unless using --checkpoint")
 
+
 def configure_logging(args):
     if args.verbose:
         # Verbose mode: Show DEBUG for our code, WARNING+ for libraries
         logging.basicConfig(
-            level=logging.DEBUG,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
         )
-        
+
         # Set library loggers to WARNING
         library_loggers = [
-            'openai', 'httpx', 'httpcore', 'urllib3', 'requests',
-            'anthropic', 'google', 'pydantic'
+            "openai",
+            "httpx",
+            "httpcore",
+            "urllib3",
+            "requests",
+            "anthropic",
+            "google",
+            "pydantic",
         ]
         for lib_logger in library_loggers:
             logging.getLogger(lib_logger).setLevel(logging.WARNING)
-        
+
         # Keep our application loggers at DEBUG
-        logging.getLogger('arcagi3').setLevel(logging.DEBUG)
-        logging.getLogger('__main__').setLevel(logging.DEBUG)
-        
+        logging.getLogger("arcagi3").setLevel(logging.DEBUG)
+        logging.getLogger("__main__").setLevel(logging.DEBUG)
+
         logger.info("Verbose mode enabled")
     else:
         # Normal mode: Use the specified log level
         logging.basicConfig(
             level=getattr(logging, args.log_level.upper()),
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         )
+
 
 # ============================================================================
 # CLI Handlers
 # ============================================================================
+
 
 def list_available_games(game_client: GameClient) -> List[dict]:
     """List all available games from the API"""
@@ -270,17 +299,75 @@ def list_available_games(game_client: GameClient) -> List[dict]:
         logger.error(f"Failed to list games: {e}")
         return []
 
-def handle_list_games(game_client: GameClient):
-    games = list_available_games(game_client)
-    if games:
-        logger.info("\nAvailable Games:")
-        logger.info("=" * 60)
-        for game in games:
-            logger.info(f"  {game['game_id']:<30} {game['title']}")
-        logger.info("=" * 60)
-        logger.info(f"Total: {len(games)} games\n")
-    else:
-        logger.warning("No games available or failed to fetch games.")
+
+def _strip_game_hash(game_id: str) -> str:
+    if not isinstance(game_id, str):
+        return game_id
+    match = _GAME_ID_WITH_HASH_RE.match(game_id)
+    return match.group("base") if match else game_id
+
+
+def _normalize_game_ids(games: List[dict]) -> List[dict]:
+    normalized = []
+    for game in games:
+        if not isinstance(game, dict):
+            normalized.append(game)
+            continue
+        game_id = game.get("game_id")
+        if not game_id:
+            normalized.append(game)
+            continue
+        stripped_id = _strip_game_hash(game_id)
+        if stripped_id != game_id:
+            game = dict(game)
+            game["game_id"] = stripped_id
+        normalized.append(game)
+    return normalized
+
+
+def handle_list_games(game_client: GameClient, json_output: bool = False):
+    """List available games, optionally in JSON format."""
+    import json
+
+    games = _normalize_game_ids(list_available_games(game_client))
+    if not games:
+        if json_output:
+            print(json.dumps([], indent=2))
+        else:
+            print("No games available or failed to fetch games.")
+        return
+
+    if json_output:
+        print(json.dumps(games, indent=2))
+        return
+
+    # Create a nice table format
+    # Calculate column widths
+    max_id_len = max(len(game["game_id"]) for game in games)
+    max_title_len = max(len(game.get("title", "")) for game in games)
+
+    # Set minimum widths
+    id_width = max(max_id_len, 20)
+    title_width = max(max_title_len, 30)
+
+    # Calculate total width
+    total_width = id_width + title_width + 7
+
+    # Print header
+    print("\n" + "=" * total_width)
+    print(f"{'Game ID':<{id_width}}  {'Title':<{title_width}}")
+    print("=" * total_width)
+
+    # Print games (sorted by game_id)
+    for game in sorted(games, key=lambda x: x["game_id"]):
+        game_id = game["game_id"]
+        title = game.get("title", "N/A")
+        print(f"{game_id:<{id_width}}  {title:<{title_width}}")
+
+    # Print footer
+    print("=" * total_width)
+    print(f"\nTotal: {len(games)} game{'s' if len(games) != 1 else ''}\n")
+
 
 def handle_list_checkpoints():
     checkpoints = CheckpointManager.list_checkpoints()
@@ -302,6 +389,7 @@ def handle_list_checkpoints():
     else:
         logger.info("No checkpoints found.\n")
 
+
 def handle_close_scorecard(args):
     card_id = args.close_scorecard
     logger.info(f"\nClosing scorecard: {card_id}")
@@ -319,301 +407,262 @@ def handle_close_scorecard(args):
     except Exception as e:
         logger.error(f"✗ Failed to close scorecard: {e}", exc_info=True)
 
-def print_result(result):
-    logger.info(f"\n{'='*60}")
-    logger.info(f"Game Result: {result.game_id}")
-    logger.info(f"{'='*60}")
-    logger.info(f"Final Score: {result.final_score}")
-    logger.info(f"Final State: {result.final_state}")
-    logger.info(f"Actions Taken: {result.actions_taken}")
-    logger.info(f"Duration: {result.duration_seconds:.2f}s")
-    logger.info(f"Total Cost: ${result.total_cost.total_cost:.4f}")
-    logger.info(f"Total Tokens: {result.usage.total_tokens}")
-    logger.info(f"\nView your scorecard online: {result.scorecard_url}")
-    logger.info(f"{'='*60}\n")
+
+def handle_list_models():
+    """List all models for enabled providers."""
+    from arcagi3.utils.api_tests import (
+        test_anthropic,
+        test_deepseek,
+        test_fireworks,
+        test_gemini,
+        test_groq,
+        test_huggingface,
+        test_openai,
+        test_openrouter,
+        test_provider_api_key,
+        test_xai,
+    )
+
+    # Provider mapping: maps provider_id to (display_name, env_var, test_func)
+    provider_mapping = {
+        "openai": ("OpenAI", "OPENAI_API_KEY", test_openai),
+        "anthropic": ("Anthropic", "ANTHROPIC_API_KEY", test_anthropic),
+        "gemini": ("Google Gemini", "GOOGLE_API_KEY", test_gemini),
+        "openrouter": ("OpenRouter", "OPENROUTER_API_KEY", test_openrouter),
+        "fireworks": ("Fireworks", "FIREWORKS_API_KEY", test_fireworks),
+        "groq": ("Groq", "GROQ_API_KEY", test_groq),
+        "deepseek": ("DeepSeek", "DEEPSEEK_API_KEY", test_deepseek),
+        "xai": ("xAI", "XAI_API_KEY", test_xai),
+        "grok": ("xAI", "XAI_API_KEY", test_xai),  # grok maps to xai
+        "huggingfacefireworks": ("Hugging Face", "HUGGING_FACE_API_KEY", test_huggingface),
+    }
+
+    # Test providers and get enabled ones
+    enabled_providers = set()
+    provider_display_names = {}
+
+    for provider_id, (provider_name, env_var, test_func) in provider_mapping.items():
+        status, _ = test_provider_api_key(provider_name, env_var, test_func)
+        if status is True:
+            enabled_providers.add(provider_id)
+            # Also add display name mapping
+            provider_display_names[provider_id] = provider_name
+            # If this is grok, also enable xai (they're the same)
+            if provider_id == "grok":
+                enabled_providers.add("xai")
+                provider_display_names["xai"] = provider_name
+
+    if not enabled_providers:
+        print("\n" + "=" * 80)
+        print("No providers are enabled. Run --check to see provider status.")
+        print("=" * 80 + "\n")
+        return
+
+    # Load models
+    base_dir = os.path.dirname(os.path.dirname(__file__))
+    models_file = os.path.join(base_dir, "models.yml")
+    models_private_file = os.path.join(base_dir, "models_private.yml")
+
+    all_models = []
+
+    # Load main models.yml
+    if os.path.exists(models_file):
+        with open(models_file, "r") as f:
+            config_data = yaml.safe_load(f)
+            if config_data and "models" in config_data:
+                all_models.extend(config_data["models"])
+
+    # Load private models.yml if it exists
+    if os.path.exists(models_private_file):
+        with open(models_private_file, "r") as f:
+            private_config_data = yaml.safe_load(f)
+            if private_config_data and "models" in private_config_data:
+                all_models.extend(private_config_data["models"])
+
+    # Filter models to only enabled providers
+    enabled_models = []
+    for model in all_models:
+        provider = model.get("provider", "").lower()
+        # Check if provider is enabled (handle grok -> xai mapping)
+        if provider in enabled_providers or (provider == "grok" and "xai" in enabled_providers):
+            enabled_models.append(model)
+
+    if not enabled_models:
+        print("\n" + "=" * 80)
+        print("No models found for enabled providers.")
+        print("=" * 80 + "\n")
+        return
+
+    # Group models by provider
+    models_by_provider: Dict[str, List[Dict[str, Any]]] = {}
+    for model in enabled_models:
+        provider = model.get("provider", "").lower()
+        # Normalize grok to xai for grouping
+        if provider == "grok":
+            provider = "xai"
+        if provider not in models_by_provider:
+            models_by_provider[provider] = []
+        models_by_provider[provider].append(model)
+
+    # Display models
+    print("\n" + "=" * 80)
+    print("Available Models (for enabled providers)")
+    print("=" * 80)
+
+    for provider_id in sorted(models_by_provider.keys()):
+        provider_name = provider_display_names.get(provider_id, provider_id.title())
+        models = models_by_provider[provider_id]
+
+        print(f"\n{provider_name} ({len(models)} model{'s' if len(models) != 1 else ''}):")
+        print("-" * 80)
+
+        # Sort models by name
+        models.sort(key=lambda m: m.get("name", ""))
+
+        for model in models:
+            name = model.get("name", "N/A")
+            pricing = model.get("pricing", {})
+            input_price = pricing.get("input", 0)
+            output_price = pricing.get("output", 0)
+            is_multimodal = model.get("is_multimodal", False)
+
+            # Build info string
+            info_parts = []
+            if is_multimodal:
+                info_parts.append("multimodal")
+
+            # Check for reasoning/thinking features
+            if "reasoning" in model or "reasoning_effort" in model:
+                info_parts.append("reasoning")
+            if "thinking" in model or "thinking_config" in model:
+                info_parts.append("thinking")
+
+            info_str = ", ".join(info_parts) if info_parts else "standard"
+
+            print(
+                f"  {name:<40} {info_str:<20} ${input_price:.2f}/${output_price:.2f} per 1M tokens"
+            )
+
+    print("\n" + "=" * 80)
+    print(f"Total: {len(enabled_models)} model{'s' if len(enabled_models) != 1 else ''} available")
+    print("=" * 80 + "\n")
 
 
-class GameLogFilter(logging.Filter):
-    """Filter that only allows logs from a specific game (thread)."""
-    def __init__(self, game_id: str):
-        super().__init__()
-        self.game_id = game_id
-    
-    def filter(self, record):
-        # Only log if this record is from the thread with matching game_id
-        return getattr(_thread_local, 'game_id', None) == self.game_id
+def handle_check():
+    """Check environment variables and test API keys."""
+    results: List[Dict[str, Any]] = []
+    games_list: Optional[List[Dict[str, str]]] = None
 
-
-def _setup_game_logger(game_id: str, config: str, log_dir: Path) -> logging.FileHandler:
-    """
-    Set up a file handler for a specific game using thread-local storage.
-    
-    Args:
-        game_id: Game ID
-        config: Config name
-        log_dir: Directory where log files should be created
-        
-    Returns:
-        File handler for this game
-    """
-    # Set thread-local game_id so filter knows which thread this is
-    _thread_local.game_id = game_id
-    
-    # Create log directory if it doesn't exist
-    log_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Create log file path
-    log_file = log_dir / f"{game_id}.log"
-    
-    # Create file handler with filter
-    file_handler = logging.FileHandler(log_file, mode='w', encoding='utf-8')
-    file_handler.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    file_handler.setFormatter(formatter)
-    file_handler.addFilter(GameLogFilter(game_id))
-    
-    # Add handler to root logger to catch all logs from this thread
-    root_logger = logging.getLogger()
-    root_logger.addHandler(file_handler)
-    
-    return file_handler
-
-
-def _teardown_game_logger(file_handler: logging.FileHandler):
-    """
-    Remove the file handler and clean up thread-local storage.
-    
-    Args:
-        file_handler: The file handler to remove
-    """
-    root_logger = logging.getLogger()
-    try:
-        root_logger.removeHandler(file_handler)
-        file_handler.close()
-    except (ValueError, AttributeError):
-        pass
-    
-    # Clear thread-local game_id
-    if hasattr(_thread_local, 'game_id'):
-        delattr(_thread_local, 'game_id')
-
-
-def _run_single_game(
-    game_id: str,
-    config: str,
-    save_results_dir: Optional[str],
-    overwrite_results: bool,
-    max_actions: int,
-    retry_attempts: int,
-    api_retries: int,
-    num_plays: int,
-    max_episode_actions: int,
-    show_images: bool,
-    memory_word_limit: Optional[int],
-    checkpoint_frequency: int,
-    close_on_exit: bool,
-    use_vision: bool,
-    game_index: int,
-    total_games: int,
-    log_dir: Optional[Path] = None,
-    submit_scorecard: bool = True,
-) -> Tuple[str, Optional[GameResult], Optional[Exception]]:
-    """
-    Run a single game and return the result.
-    
-    Returns:
-        Tuple of (game_id, result, exception)
-    """
-    # Set up per-game logging if log_dir is provided
-    file_handler = None
-    if log_dir:
-        try:
-            file_handler = _setup_game_logger(game_id, config, log_dir)
-        except Exception as e:
-            logger.warning(f"Failed to set up per-game logging for {game_id}: {e}")
-    
-    try:
-        logger.info(f"\n{'='*60}")
-        logger.info(f"Game {game_index}/{total_games}: {game_id}")
-        logger.info(f"{'='*60}")
-        
-        from arcagi3.utils import load_hints, find_hints_file
-        
-        hints_file = find_hints_file()
-        hint_found = False
-        if hints_file:
-            hints = load_hints(hints_file, game_id=game_id)
-            hint_found = game_id in hints
-        
-        if hint_found:
-            logger.info(f"✓ Hint found for game {game_id}")
-        else:
-            logger.debug(f"⊘ No hint found for game {game_id}")
-        
-        # Create a separate tester instance for each game to ensure thread safety
-        tester = ARC3Tester(
-            config=config,
-            save_results_dir=save_results_dir,
-            overwrite_results=overwrite_results,
-            max_actions=max_actions,
-            retry_attempts=retry_attempts,
-            api_retries=api_retries,
-            num_plays=num_plays,
-            max_episode_actions=max_episode_actions,
-            show_images=show_images,
-            memory_word_limit=memory_word_limit,
-            checkpoint_frequency=checkpoint_frequency,
-            close_on_exit=close_on_exit,
-            use_vision=use_vision,
-            submit_scorecard=submit_scorecard,
-        )
-        
-        try:
-            result = tester.play_game(game_id)
-            if result:
-                logger.info(
-                    f"✓ [{game_id}] Completed: {result.final_state}, "
-                    f"Score: {result.final_score}, "
-                    f"Cost: ${result.total_cost.total_cost:.4f}"
-                )
-                if result.scorecard_url:
-                    logger.info(f"View your scorecard online: {result.scorecard_url}")
-                return (game_id, result, None)
-            else:
-                logger.info(f"⊘ [{game_id}] Skipped (result already exists)")
-                return (game_id, None, None)
-        except Exception as e:
-            logger.error(f"✗ [{game_id}] Failed: {e}", exc_info=True)
-            return (game_id, None, e)
-    finally:
-        # Clean up per-game logging
-        if file_handler:
-            try:
-                _teardown_game_logger(file_handler)
-            except Exception as e:
-                logger.warning(f"Failed to teardown logging for {game_id}: {e}")
-
-
-def run_batch_games(
-    game_ids: List[str],
-    config: str,
-    save_results_dir: Optional[str] = None,
-    overwrite_results: bool = False,
-    max_actions: int = 40,
-    retry_attempts: int = 3,
-    api_retries: int = 3,
-    num_plays: int = 1,
-    max_episode_actions: int = 0,
-    show_images: bool = False,
-    memory_word_limit: Optional[int] = None,
-    checkpoint_frequency: int = 1,
-    close_on_exit: bool = False,
-    use_vision: bool = True,
-    submit_scorecard: bool = True,
-):
-    """
-    Run multiple games concurrently in parallel.
-    
-    Args:
-        game_ids: List of game IDs to run
-        config: Model configuration name
-        save_results_dir: Directory to save results
-        overwrite_results: Whether to overwrite existing results
-        max_actions: Maximum actions for entire run across all games/plays (0 = no limit)
-        retry_attempts: Number of retry attempts for API failures
-        api_retries: Number of retry attempts for ARC-AGI-3 API calls
-        num_plays: Number of times to play each game (0 = infinite, continues session with memory)
-        max_episode_actions: Maximum actions per game/episode (0 = no limit)
-        show_images: Whether to display game frames in the terminal
-        memory_word_limit: Maximum number of words allowed in memory scratchpad
-        checkpoint_frequency: Save checkpoint every N actions (default: 1, 0 to disable periodic checkpoints)
-        close_on_exit: Close scorecard on exit even if game not won
-        use_vision: Use vision to play the game
-    """
-    logger.info(f"Running {len(game_ids)} games concurrently with config {config}")
-    
-    # Create log directory for this concurrent run
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_dir = Path("logs") / config / f"concurrent_{timestamp}"
-    logger.info(f"Log files will be saved to: {log_dir}")
-    
-    # Track results
-    results = []
-    successes = 0
-    failures = 0
-    skipped = 0
-    
-    # Run games concurrently using ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=len(game_ids)) as executor:
-        # Submit all games
-        future_to_game = {
-            executor.submit(
-                _run_single_game,
-                game_id,
-                config,
-                save_results_dir,
-                overwrite_results,
-                max_actions,
-                retry_attempts,
-                api_retries,
-                num_plays,
-                max_episode_actions,
-                show_images,
-                memory_word_limit,
-                checkpoint_frequency,
-                close_on_exit,
-                use_vision,
-                i + 1,
-                len(game_ids),
-                log_dir,
-                submit_scorecard,
-            ): game_id
-            for i, game_id in enumerate(game_ids)
+    # Test ARC API key
+    arc_status, arc_message, games_list = test_arc_api_key()
+    results.append(
+        {
+            "name": "ARC-AGI-3 API",
+            "env_var": "ARC_API_KEY",
+            "status": arc_status,
+            "message": arc_message,
         }
-        
-        # Collect results as they complete
-        for future in as_completed(future_to_game):
-            game_id, result, exception = future.result()
-            if exception:
-                failures += 1
-            elif result:
-                results.append(result)
-                successes += 1
-            else:
-                skipped += 1
-    
-    # Summary
-    logger.info(f"\n{'='*60}")
-    logger.info("Batch Run Summary")
-    logger.info(f"{'='*60}")
-    logger.info(f"Total Games: {len(game_ids)}")
-    logger.info(f"Successes: {successes}")
-    logger.info(f"Failures: {failures}")
-    logger.info(f"Skipped: {skipped}")
-    
-    if results:
-        total_cost = sum(r.total_cost.total_cost for r in results)
-        total_actions = sum(r.actions_taken for r in results)
-        total_duration = sum(r.duration_seconds for r in results)
-        
-        logger.info(f"\nAggregates:")
-        logger.info(f"  Total Cost: ${total_cost:.4f}")
-        logger.info(f"  Total Actions: {total_actions}")
-        logger.info(f"  Total Duration: {total_duration:.2f}s")
-        logger.info(f"  Avg Cost per Game: ${total_cost/len(results):.4f}")
-        logger.info(f"  Avg Actions per Game: {total_actions/len(results):.1f}")
-        
-        # Show scorecard URLs
-        logger.info(f"\nScorecard Links:")
-        for result in results:
-            if result.scorecard_url:
-                logger.info(f"  {result.game_id}: {result.scorecard_url}")
-    
-    # Show log file locations
-    logger.info(f"\nLog Files:")
-    for game_id in game_ids:
-        log_file = log_dir / f"{game_id}.log"
-        if log_file.exists():
-            logger.info(f"  {game_id}: {log_file}")
-    
-    logger.info(f"{'='*60}\n")
+    )
+
+    # Test provider API keys with provider mapping
+    provider_mapping = {
+        "openai": ("OpenAI", "OPENAI_API_KEY", test_openai),
+        "anthropic": ("Anthropic", "ANTHROPIC_API_KEY", test_anthropic),
+        "gemini": ("Google Gemini", "GOOGLE_API_KEY", test_gemini),
+        "openrouter": ("OpenRouter", "OPENROUTER_API_KEY", test_openrouter),
+        "fireworks": ("Fireworks", "FIREWORKS_API_KEY", test_fireworks),
+        "groq": ("Groq", "GROQ_API_KEY", test_groq),
+        "deepseek": ("DeepSeek", "DEEPSEEK_API_KEY", test_deepseek),
+        "xai": ("xAI", "XAI_API_KEY", test_xai),
+        "huggingfacefireworks": ("Hugging Face", "HUGGING_FACE_API_KEY", test_huggingface),
+    }
+
+    working_provider = None
+    for provider_id, (provider_name, env_var, test_func) in provider_mapping.items():
+        status, message = test_provider_api_key(provider_name, env_var, test_func)
+        results.append(
+            {
+                "name": provider_name,
+                "env_var": env_var,
+                "status": status,
+                "message": message,
+                "provider_id": provider_id,
+            }
+        )
+        if status is True and working_provider is None:
+            working_provider = provider_id
+
+    # Print results table
+    print("\n" + "=" * 80)
+    print(f"{'Service':<25} {'Environment Variable':<30} {'Status':<25}")
+    print("=" * 80)
+
+    for result in results:
+        status_display = result["message"]
+        print(f"{result['name']:<25} {result['env_var']:<30} {status_display:<25}")
+
+    print("=" * 80)
+
+    # Determine ready status
+    arc_passed = results[0]["status"] is True
+    provider_passed = any(r["status"] is True for r in results[1:])
+
+    ready = arc_passed and provider_passed
+
+    print(f"\n{'='*80}")
+    if ready:
+        print("✓ READY TO BENCHMARK")
+        print("  - ARC-AGI-3 API: ✓ Connected")
+        print(
+            f"  - Provider APIs: {sum(1 for r in results[1:] if r['status'] is True)} configured and working"
+        )
+
+        # Generate example command
+        if games_list and working_provider:
+            # Get first game
+            example_game = games_list[0]["game_id"]
+
+            # Find a model config for the working provider
+            try:
+                import os
+
+                import yaml
+
+                # Load models.yml (same path logic as task_utils)
+                base_dir = os.path.dirname(os.path.dirname(__file__))
+                models_file = os.path.join(base_dir, "models.yml")
+
+                if os.path.exists(models_file):
+                    with open(models_file, "r") as f:
+                        models_data = yaml.safe_load(f)
+
+                    # Find first model for this provider
+                    example_config = None
+                    for model in models_data.get("models", []):
+                        if model.get("provider") == working_provider:
+                            example_config = model.get("name")
+                            break
+
+                    if example_config:
+                        print("\n  Example command:")
+                        print("  uv run python -m arcagi3.runner \\")
+                        print("    --agent adcr \\")
+                        print(f"    --game_id {example_game} \\")
+                        print(f"    --config {example_config} \\")
+                        print("    --max_actions 3")
+            except Exception:
+                # If we can't find a model, just show a generic example
+                example_game = games_list[0]["game_id"]
+                print("\n  Example command:")
+                print("  uv run python -m arcagi3.runner \\")
+                print("    --agent adcr \\")
+                print(f"    --game_id {example_game} \\")
+                print("    --config <model-config> \\")
+                print("    --max_actions 3")
+    else:
+        print("✗ NOT READY TO BENCHMARK")
+        if not arc_passed:
+            print("  - ARC-AGI-3 API: ✗ Not connected")
+        if not provider_passed:
+            print("  - Provider APIs: ✗ No working provider configured")
+    print("=" * 80 + "\n")

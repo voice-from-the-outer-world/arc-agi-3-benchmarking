@@ -4,19 +4,22 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 # ============================================================================
 # Static ARC Task Schemas (for adapter compatibility)
 # ============================================================================
 
+
 class ARCTaskOutput(BaseModel):
     """Output for static ARC tasks (not used in ARC-AGI-3 games)"""
+
     output: List[List[int]]
 
 
 class ARCPair(BaseModel):
     """Input/output pair for static ARC tasks (not used in ARC-AGI-3 games)"""
+
     input: List[List[int]]
     output: Optional[List[List[int]]] = None
 
@@ -25,8 +28,10 @@ class ARCPair(BaseModel):
 # ARC-AGI-3 Game Schemas
 # ============================================================================
 
+
 class GameAction(Enum):
     """Available actions in ARC-AGI-3 games"""
+
     RESET = "RESET"
     ACTION1 = "ACTION1"  # Move Up
     ACTION2 = "ACTION2"  # Move Down
@@ -39,6 +44,7 @@ class GameAction(Enum):
 
 class GameState(Enum):
     """Possible game states"""
+
     NOT_PLAYED = "NOT_PLAYED"
     IN_PROGRESS = "IN_PROGRESS"
     WIN = "WIN"
@@ -47,6 +53,7 @@ class GameState(Enum):
 
 class ActionData(BaseModel):
     """Data associated with a game action"""
+
     x: Optional[int] = None
     y: Optional[int] = None
     reasoning: Optional[Dict[str, Any]] = None
@@ -54,6 +61,7 @@ class ActionData(BaseModel):
 
 class GameActionRecord(BaseModel):
     """Record of a single action taken during a game"""
+
     action_num: int
     action: str
     action_data: Optional[ActionData] = None
@@ -63,8 +71,50 @@ class GameActionRecord(BaseModel):
     cost: Optional["Cost"] = None
 
 
+class ModelCallRecord(BaseModel):
+    """Record of a single model/provider call during a game."""
+
+    call_num: Optional[int] = None
+    step_name: Optional[str] = None
+    action_num: Optional[int] = None
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    messages: List[Dict[str, Any]] = Field(default_factory=list)
+    response: Optional[str] = None
+    usage: Optional[Dict[str, int]] = None
+    cost: Optional[Dict[str, float]] = None
+    timestamp: datetime = None
+
+    model_config = {
+        "json_encoders": {
+            datetime: lambda v: v.isoformat() if v else None,
+        }
+    }
+
+    @model_validator(mode="before")
+    @classmethod
+    def set_timestamp(cls, values: Dict[str, Any]) -> Dict[str, Any]:
+        if isinstance(values, dict) and values.get("timestamp") is None:
+            values["timestamp"] = datetime.utcnow()
+        return values
+
+
+class GameStep(BaseModel):
+    """
+    Return type for `MultimodalAgent.step()`.
+
+    - action: the game action to execute (must contain at least {"action": "ACTION1" | ...})
+      Optional additional fields are action-specific (e.g. x/y for ACTION6, or a "data" dict).
+    - reasoning: opaque metadata for logging/debug; deep-copied and sent to the ARC API as-is.
+    """
+
+    action: Dict[str, Any]
+    reasoning: Dict[str, Any] = {}
+
+
 class GameResult(BaseModel):
     """Complete result of playing a single game"""
+
     game_id: str
     config: str
     final_score: int
@@ -78,18 +128,14 @@ class GameResult(BaseModel):
     timestamp: datetime = None
     scorecard_url: Optional[str] = None
     card_id: Optional[str] = None
-    
-    model_config = {
-        'json_encoders': {
-            datetime: lambda v: v.isoformat() if v else None
-        }
-    }
-    
-    @model_validator(mode='before')
+
+    model_config = {"json_encoders": {datetime: lambda v: v.isoformat() if v else None}}
+
+    @model_validator(mode="before")
     @classmethod
     def set_timestamp(cls, values: Dict[str, Any]) -> Dict[str, Any]:
-        if isinstance(values, dict) and 'timestamp' not in values:
-            values['timestamp'] = datetime.utcnow()
+        if isinstance(values, dict) and "timestamp" not in values:
+            values["timestamp"] = datetime.utcnow()
         return values
 
 
@@ -97,8 +143,10 @@ class GameResult(BaseModel):
 # Provider/Model Schemas (from old repo)
 # ============================================================================
 
+
 class APIType:
     """Enum for the different API types that can be used with the OpenAI API."""
+
     CHAT_COMPLETIONS = "chat_completions"
     RESPONSES = "responses"
 
@@ -146,16 +194,12 @@ class AttemptMetadata(BaseModel):
     task_id: Optional[str] = None
     pair_index: Optional[int] = 0
     test_id: Optional[str] = None
-    
-    model_config = {
-        'json_encoders': {
-            datetime: lambda v: v.isoformat()
-        }
-    }
+
+    model_config = {"json_encoders": {datetime: lambda v: v.isoformat()}}
 
     def __str__(self):
         return json.dumps(self.model_dump(), indent=2, default=str)
-    
+
     __repr__ = __str__
 
 
@@ -184,6 +228,7 @@ class ModelConfig(BaseModel):
     A model configuration used to populate a model's kwargs and calculate pricing metadata.
     Points to models.yml
     """
+
     name: str  # Config name
     model_name: str  # The actual model name to use with the provider's API
     provider: str
@@ -191,39 +236,44 @@ class ModelConfig(BaseModel):
     pricing: ModelPricing
     api_type: Optional[str] = APIType.CHAT_COMPLETIONS
     kwargs: Dict[str, Any] = {}
-    
-    model_config = {
-        'protected_namespaces': (),
-        'extra': 'allow'
-    }
-    
-    @model_validator(mode='before')
+
+    model_config = {"protected_namespaces": (), "extra": "allow"}
+
+    @model_validator(mode="before")
     @classmethod
     def extract_kwargs(cls, values: Dict[str, Any]) -> Dict[str, Any]:
         """Extract all extra fields into kwargs"""
         if not isinstance(values, dict):
             return values
-            
+
         kwargs = {}
-        known_fields = {'name', 'provider', 'pricing', 'kwargs', 'model_name', 'api_type', 'is_multimodal'}
-        
+        known_fields = {
+            "name",
+            "provider",
+            "pricing",
+            "kwargs",
+            "model_name",
+            "api_type",
+            "is_multimodal",
+        }
+
         for field_name, value in values.items():
             if field_name not in known_fields:
                 kwargs[field_name] = value
-                
+
         # Update the kwargs field with our extracted values
         if kwargs:
-            values['kwargs'] = {**kwargs, **values.get('kwargs', {})}
-            
+            values["kwargs"] = {**kwargs, **values.get("kwargs", {})}
+
             # Remove the extracted fields from the top level
             for field_name in kwargs:
                 if field_name in values:
                     del values[field_name]
-        
+
         # Ensure capability flags are not kept in kwargs accidentally
-        if 'kwargs' in values and isinstance(values['kwargs'], dict):
-            values['kwargs'].pop('is_multimodal', None)
-                    
+        if "kwargs" in values and isinstance(values["kwargs"], dict):
+            values["kwargs"].pop("is_multimodal", None)
+
         return values
 
 
@@ -231,9 +281,11 @@ class ModelConfig(BaseModel):
 # Stream Response
 # ============================================================================
 
+
 @dataclass
 class StreamResponse:
     """Wrapper for consumed stream responses"""
+
     content: str
     prompt_tokens: int = 0
     completion_tokens: int = 0
