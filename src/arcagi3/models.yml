@@ -619,6 +619,32 @@ models:
       input: 5.00
       output: 25.00
 
+  - name: "claude-opus-4-6-openrouter"
+    model_name: "anthropic/claude-opus-4.6"
+    provider: "openrouter"
+    is_multimodal: true
+    max_tokens: 64000
+    extra_body:
+      reasoning:
+        "enabled": true
+    pricing:
+      date: "2025-08-07"
+      input: 5.00
+      output: 25.00
+
+  - name: "claude-sonnet-4-6-openrouter"
+    model_name: "anthropic/claude-sonnet-4.6"
+    provider: "openrouter"
+    is_multimodal: true
+    max_tokens: 64000
+    extra_body:
+      reasoning:
+        "enabled": true
+    pricing:
+      date: "2026-02-19"
+      input: 3.00
+      output: 15.00
+
   - name: "claude-sonnet-4-5-20250929-thinking-16k"
     model_name: "claude-sonnet-4-5-20250929"
     provider: "anthropic"
@@ -842,6 +868,39 @@ models:
       input: 0.10
       output: 0.40
 
+  - name: "gemini-3-flash-preview"
+    model_name: "gemini-3-flash-preview"
+    provider: "gemini"
+    is_multimodal: true
+    max_output_tokens: 1000000
+    reasoning: true
+    pricing:
+      date: "2026-02-13"
+      input: 0.50
+      output: 3.00
+
+  - name: "gemini-3-pro-preview"
+    model_name: "gemini-3-pro-preview"
+    provider: "gemini"
+    is_multimodal: true
+    max_output_tokens: 65536
+    reasoning: true
+    pricing:
+      date: "2026-02-13"
+      input: 2.00
+      output: 12.00
+
+  - name: "gemini-3.1-pro-preview"
+    model_name: "gemini-3.1-pro-preview"
+    provider: "gemini"
+    is_multimodal: true
+    max_output_tokens: 65536
+    reasoning: true
+    pricing:
+      date: "2026-02-19"
+      input: 2.00
+      output: 12.00
+
   - name: "gemini-2-5-pro-preview-openrouter"
     model_name: "google/gemini-2.5-pro-preview"
     provider: "openrouter"
@@ -862,6 +921,32 @@ models:
         "enabled": true
     pricing:
       date: "2025-11-18"
+      input: 2.00
+      output: 12.00
+
+  - name: "gemini-3-flash-preview-openrouter"
+    model_name: "google/gemini-3-flash-preview"
+    provider: "openrouter"
+    is_multimodal: true
+    max_tokens: 100000
+    extra_body:
+      reasoning:
+        "enabled": true
+    pricing:
+      date: "2025-12-17"
+      input: 0.50
+      output: 3.00
+
+  - name: "gemini-3-1-pro-openrouter"
+    model_name: "google/gemini-3.1-pro-preview"
+    provider: "openrouter"
+    is_multimodal: true
+    max_tokens: 65535
+    extra_body:
+      reasoning:
+        "enabled": true
+    pricing:
+      date: "2026-02-19"
       input: 2.00
       output: 12.00
 
@@ -987,3 +1072,31 @@ models:
       date: "2026-01-28"
       input: 0.20
       output: 0.60
+
+  - name: "kimi-k2-5-openrouter"
+    model_name: "moonshotai/kimi-k2.5"
+    provider: "openrouter"
+    max_tokens: 100000
+    extra_body:
+      reasoning:
+        "enabled": true
+    pricing:
+      date: "2026-01-27"
+      input: 0.23
+      output: 3.00
+
+########################
+###### Z.AI ############
+########################
+
+  - name: "glm-5-openrouter"
+    model_name: "z-ai/glm-5"
+    provider: "openrouter"
+    max_tokens: 65535
+    extra_body:
+      reasoning:
+        "enabled": true
+    pricing:
+      date: "2026-02-11"
+      input: 1.00
+      output: 3.20

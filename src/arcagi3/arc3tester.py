@@ -42,8 +42,11 @@ class ARC3Tester:
         show_images: bool = False,
         use_vision: bool = True,
         checkpoint_frequency: int = 1,
+        checkpoint_dir: Optional[str] = None,
         close_on_exit: bool = False,
         memory_word_limit: Optional[int] = None,
+        live_result_file: Optional[str] = None,
+        live_result_flush_frequency: int = 1,
         submit_scorecard: bool = True,
         agent_class: Optional[type] = None,
         agent_kwargs: Optional[dict] = None,
@@ -63,8 +66,11 @@ class ARC3Tester:
             show_images: Whether to display game frames in the terminal
             use_vision: Whether to use vision (images) or text-only mode
             checkpoint_frequency: Save checkpoint every N actions (default: 1, 0 to disable)
+            checkpoint_dir: Directory to write checkpoints (defaults to .checkpoint)
             close_on_exit: Close scorecard on exit even if not won (prevents checkpoint resume)
             memory_word_limit: Memory scratchpad word limit (overrides model config, default: from config or 500)
+            live_result_file: Optional file path for continuously-updated run progress JSON
+            live_result_flush_frequency: Flush live progress every N actions (default: 1)
             agent_class: Optional agent class to use instead of DefaultTesterAgent
         """
         self.config = config
@@ -80,7 +86,10 @@ class ARC3Tester:
         self.show_images = show_images
         self.use_vision = use_vision
         self.checkpoint_frequency = checkpoint_frequency
+        self.checkpoint_dir = checkpoint_dir
         self.close_on_exit = close_on_exit
+        self.live_result_file = live_result_file
+        self.live_result_flush_frequency = live_result_flush_frequency
         self.submit_scorecard = submit_scorecard
 
         # Determine memory limit: CLI > Config > Default (500)
@@ -201,6 +210,9 @@ class ARC3Tester:
                 "num_plays": self.num_plays,
                 "max_episode_actions": self.max_episode_actions,
                 "checkpoint_frequency": self.checkpoint_frequency,
+                "checkpoint_dir": self.checkpoint_dir,
+                "live_result_file": self.live_result_file,
+                "live_result_flush_frequency": self.live_result_flush_frequency,
             }
             # Add agent-specific kwargs if using ADCRAgent or similar
             if self.agent_class != DefaultTesterAgent:

@@ -68,6 +68,10 @@ class GameActionRecord(BaseModel):
     reasoning: Optional[Dict[str, Any]] = None
     result_score: int
     result_state: str
+    # Snapshot of game frame(s) before and after this action.
+    # Each value is a sequence of ARC grids returned by the API.
+    frames_before: Optional[List[List[List[int]]]] = None
+    frames_after: Optional[List[List[List[int]]]] = None
     cost: Optional["Cost"] = None
 
 

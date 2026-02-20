@@ -1,0 +1,1098 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ARC-AGI-3 Results Viewer</title>
+  <style>
+    :root {
+      --bg: #f4f0e8;
+      --panel: #fffaf2;
+      --ink: #1f2933;
+      --muted: #5a6773;
+      --line: #e6ddcf;
+      --accent: #0f766e;
+      --accent-2: #c2410c;
+      --good: #166534;
+      --bad: #9a3412;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(1300px 500px at 0% 0%, #efe6d8 0%, transparent 60%),
+        radial-gradient(1200px 500px at 100% 100%, #e9f0ea 0%, transparent 60%),
+        var(--bg);
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      min-height: 100vh;
+    }
+    aside {
+      border-right: 1px solid var(--line);
+      padding: 18px 14px;
+      background: rgba(255, 252, 247, 0.8);
+      backdrop-filter: blur(4px);
+    }
+    main {
+      padding: 18px 20px 28px;
+      min-width: 0;
+    }
+    h1 {
+      font-size: 18px;
+      margin: 0 0 8px;
+      letter-spacing: 0.02em;
+      color: #0b3a35;
+    }
+    .muted { color: var(--muted); }
+    .small { font-size: 12px; }
+    .runs {
+      margin-top: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: calc(100vh - 150px);
+      overflow: auto;
+      padding-right: 2px;
+    }
+    .run-btn {
+      width: 100%;
+      text-align: left;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 9px 10px;
+      background: white;
+      cursor: pointer;
+      color: var(--ink);
+    }
+    .run-btn.active {
+      border-color: var(--accent);
+      box-shadow: inset 0 0 0 1px var(--accent);
+      background: #f0fbf9;
+    }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(120px, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px 12px;
+    }
+    .card .k {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .card .v {
+      margin-top: 3px;
+      font-size: 18px;
+      font-weight: 650;
+      letter-spacing: 0.01em;
+    }
+    .toolbar {
+      display: grid;
+      grid-template-columns: 240px 180px 1fr;
+      gap: 10px;
+      margin: 14px 0 10px;
+    }
+    input, select, button {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 9px;
+      background: white;
+      color: var(--ink);
+      font: inherit;
+    }
+    input, select { width: 100%; }
+    button { cursor: pointer; }
+    #downloadGifBtn {
+      font-size: 18px;
+      line-height: 1;
+      font-weight: 700;
+      color: #0f766e;
+      min-width: 40px;
+    }
+
+    .table-wrap {
+      max-height: 42vh;
+      overflow: auto;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: white;
+    }
+    .bottom-split {
+      display: grid;
+      grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+      gap: 12px;
+      margin-top: 12px;
+      align-items: start;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: white;
+    }
+    thead th {
+      text-align: left;
+      font-size: 12px;
+      color: var(--muted);
+      padding: 8px 8px;
+      border-bottom: 1px solid var(--line);
+      background: #fbf7ef;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+    tbody td {
+      border-top: 1px solid #f1eadd;
+      padding: 7px 8px;
+      font-size: 13px;
+      vertical-align: top;
+    }
+    tbody tr:hover { background: #fcfaf5; }
+    tbody tr.active { background: #effaf7; }
+    .state {
+      font-weight: 650;
+      letter-spacing: 0.01em;
+    }
+    .state.win { color: var(--good); }
+    .state.game-over { color: var(--bad); }
+    .state.in-progress { color: var(--accent-2); }
+
+    .playback {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+      padding: 14px;
+      min-width: 0;
+    }
+    .info-panel {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+      padding: 14px;
+      min-width: 0;
+    }
+    .info-panel h2 {
+      margin: 0 0 10px;
+      font-size: 18px;
+      color: #0b3a35;
+    }
+    .playback h2 {
+      margin: 0 0 10px;
+      font-size: 18px;
+      color: #0b3a35;
+    }
+    .playback-controls {
+      display: grid;
+      grid-template-columns: auto auto auto 1fr auto;
+      gap: 10px;
+      margin-bottom: 12px;
+      align-items: center;
+    }
+    .canvas-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .canvas-panel h3 {
+      margin: 0 0 6px;
+      font-size: 13px;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      color: #115e59;
+    }
+    .slider {
+      width: 100%;
+      margin: 0;
+    }
+    .canvas-wrap {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fdfbf7;
+      padding: 10px;
+      overflow: auto;
+      max-height: 660px;
+      min-height: 420px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .grid-canvas {
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      display: block;
+      margin: 0 auto;
+    }
+    .pb-meta {
+      margin-top: 10px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .info-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+      min-width: 0;
+    }
+    .detail-card {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      padding: 10px 12px;
+      min-height: 120px;
+      min-width: 0;
+    }
+    .detail-label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: #0f766e;
+      margin-bottom: 6px;
+      font-weight: 650;
+    }
+    .detail-text {
+      font-family: "IBM Plex Mono", "Consolas", monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+      line-height: 1.35;
+      color: #1f2933;
+      max-height: 230px;
+      max-width: 100%;
+      overflow: auto;
+      min-width: 0;
+    }
+    .detail-card.tall .detail-text {
+      max-height: 320px;
+      overflow: auto;
+    }
+    #detailMemory {
+      max-height: none;
+      overflow: visible;
+    }
+
+    @media (max-width: 1320px) {
+      .bottom-split { grid-template-columns: 1fr; }
+      .table-wrap { max-height: 44vh; }
+    }
+    @media (max-width: 980px) {
+      .layout { grid-template-columns: 1fr; }
+      aside { border-right: 0; border-bottom: 1px solid var(--line); }
+      .runs { max-height: 240px; }
+      .cards { grid-template-columns: repeat(3, minmax(120px, 1fr)); }
+      .toolbar { grid-template-columns: 1fr; }
+      .playback-controls { grid-template-columns: 1fr 1fr 1fr; }
+      .canvas-grid { grid-template-columns: 1fr; }
+      .info-grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside>
+      <h1>Results Viewer</h1>
+      <div class="muted small">Local run folders under <code>results/</code></div>
+      <div class="runs" id="runs"></div>
+    </aside>
+    <main>
+      <div id="titleRow" class="muted">Select a run</div>
+      <div class="cards" id="cards"></div>
+
+      <div class="toolbar">
+        <input id="search" placeholder="Filter by game/model/file..." />
+        <select id="stateFilter">
+          <option value="">All states</option>
+          <option value="WIN">WIN</option>
+          <option value="GAME_OVER">GAME_OVER</option>
+          <option value="IN_PROGRESS">IN_PROGRESS</option>
+        </select>
+        <div class="small muted" id="countRow"></div>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Game</th>
+              <th>Model</th>
+              <th>State</th>
+              <th>Score</th>
+              <th>Actions</th>
+              <th>Duration (s)</th>
+              <th>Cost ($)</th>
+              <th>Tokens</th>
+              <th>Timestamp</th>
+              <th>File</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+
+      <div class="bottom-split">
+        <div class="playback" id="playbackPanel">
+          <h2>Move Playback</h2>
+          <div class="playback-controls">
+            <button id="prevBtn" type="button">Prev</button>
+            <button id="playBtn" type="button">Play</button>
+            <button id="nextBtn" type="button">Next</button>
+            <input id="frameSlider" class="slider" type="range" min="0" max="0" value="0" />
+            <button id="downloadGifBtn" type="button" title="Download game GIF" aria-label="Download game GIF">⭳</button>
+          </div>
+          <div class="canvas-grid">
+            <div class="canvas-panel">
+              <h3>Before</h3>
+              <div class="canvas-wrap">
+                <canvas id="inputCanvas" class="grid-canvas" width="480" height="480"></canvas>
+              </div>
+            </div>
+            <div class="canvas-panel">
+              <h3>After</h3>
+              <div class="canvas-wrap">
+                <canvas id="outputCanvas" class="grid-canvas" width="480" height="480"></canvas>
+              </div>
+            </div>
+          </div>
+          <div class="pb-meta" id="playbackMeta">Select a row to load playback.</div>
+        </div>
+
+        <div class="info-panel" id="infoPanel">
+          <h2>Move Details</h2>
+          <div class="info-grid">
+            <div class="detail-card">
+              <div class="detail-label">Action</div>
+              <div class="detail-text" id="detailAction">Select a move to inspect action.</div>
+            </div>
+            <div class="detail-card">
+              <div class="detail-label">Reasoning</div>
+              <div class="detail-text" id="detailReasoning">Reasoning details will appear here.</div>
+            </div>
+            <div class="detail-card">
+              <div class="detail-label">Memory</div>
+              <div class="detail-text" id="detailMemory">Memory snapshot will appear here.</div>
+            </div>
+            <div class="detail-card tall">
+              <div class="detail-label">Model Input</div>
+              <div class="detail-text" id="detailModelInput">Model input will appear here.</div>
+            </div>
+            <div class="detail-card tall">
+              <div class="detail-label">Model Output</div>
+              <div class="detail-text" id="detailModelOutput">Model output will appear here.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    // Keep this mapping in sync with src/arcagi3/utils/image.py::_PALETTE (indices 0..15)
+    const ARC_COLORS = [
+      "#FFFFFF", // 0 White
+      "#CCCCCC", // 1 Off-white
+      "#999999", // 2 Neutral light
+      "#666666", // 3 Neutral
+      "#333333", // 4 Off-black
+      "#000000", // 5 Black
+      "#E53AA3", // 6 Magenta
+      "#FF7BCC", // 7 Magenta light
+      "#F93C31", // 8 Red
+      "#1E93FF", // 9 Blue
+      "#88D8F1", // 10 Blue light
+      "#FFDC00", // 11 Yellow
+      "#FF851B", // 12 Orange
+      "#921231", // 13 Maroon
+      "#4FCC30", // 14 Green
+      "#A356D6"  // 15 Purple
+    ];
+    const ACTION_LABELS = {
+      RESET: "Reset",
+      ACTION1: "Up",
+      ACTION2: "Down",
+      ACTION3: "Left",
+      ACTION4: "Right",
+      ACTION5: "Action",
+      ACTION6: "Click",
+      ACTION7: "Undo"
+    };
+
+    const state = {
+      runs: [],
+      currentRun: null,
+      results: [],
+      hasLiveRows: false,
+      selectedFile: null,
+      selectedKey: null,
+      selectedRowVersion: null,
+      selectedResult: null,
+      playbackFrames: [],
+      playbackIndex: 0,
+      playbackTimer: null,
+      refreshTimer: null
+    };
+
+    const fmtInt = (n) => Number(n || 0).toLocaleString();
+    const fmtFloat = (n, d = 2) => Number(n || 0).toFixed(d);
+    const els = {
+      rows: document.getElementById("rows"),
+      runs: document.getElementById("runs"),
+      titleRow: document.getElementById("titleRow"),
+      cards: document.getElementById("cards"),
+      search: document.getElementById("search"),
+      stateFilter: document.getElementById("stateFilter"),
+      countRow: document.getElementById("countRow"),
+      detailAction: document.getElementById("detailAction"),
+      detailReasoning: document.getElementById("detailReasoning"),
+      detailMemory: document.getElementById("detailMemory"),
+      detailModelInput: document.getElementById("detailModelInput"),
+      detailModelOutput: document.getElementById("detailModelOutput"),
+      frameSlider: document.getElementById("frameSlider"),
+      playBtn: document.getElementById("playBtn"),
+      prevBtn: document.getElementById("prevBtn"),
+      nextBtn: document.getElementById("nextBtn"),
+      downloadGifBtn: document.getElementById("downloadGifBtn"),
+      playbackMeta: document.getElementById("playbackMeta"),
+      inputCanvas: document.getElementById("inputCanvas"),
+      outputCanvas: document.getElementById("outputCanvas"),
+      playbackPanel: document.getElementById("playbackPanel")
+    };
+
+    async function getJSON(path) {
+      const res = await fetch(path);
+      if (!res.ok) throw new Error(await res.text());
+      return await res.json();
+    }
+
+    function stateClass(s) {
+      if (s === "WIN") return "win";
+      if (s === "GAME_OVER") return "game-over";
+      if (s === "IN_PROGRESS") return "in-progress";
+      return "";
+    }
+
+    function rowVersion(row) {
+      return [
+        row.file || "",
+        row.timestamp || "",
+        row.actions_taken || 0,
+        row.final_state || "",
+        row.final_score || 0
+      ].join("|");
+    }
+
+    function asText(value) {
+      if (value === null || value === undefined) return "";
+      if (typeof value === "string") return value.trim();
+      if (typeof value === "number" || typeof value === "boolean") return String(value);
+      return "";
+    }
+
+    function normalizeActionCode(value) {
+      const raw = asText(value).toUpperCase();
+      if (!raw) return "";
+      if (raw.startsWith("ACTION")) return raw;
+      if (/^\d+$/.test(raw)) return `ACTION${Number(raw)}`;
+      return raw;
+    }
+
+    function getDecisionPayload(reasoning) {
+      if (!reasoning) return null;
+      if (typeof reasoning === "string") return { reasoning: reasoning.trim() };
+      if (typeof reasoning !== "object" || Array.isArray(reasoning)) return null;
+
+      if (reasoning.decision && typeof reasoning.decision === "object") {
+        return reasoning.decision;
+      }
+      if (reasoning.human_action && typeof reasoning.human_action === "object") {
+        return reasoning.human_action;
+      }
+      return reasoning;
+    }
+
+    function summarizeFrameAction(action) {
+      const decision = getDecisionPayload(action.reasoning);
+      const actionCode = normalizeActionCode((decision && decision.action) || action.action);
+      const translated = ACTION_LABELS[actionCode] || "";
+      const humanActionText = asText(decision && decision.human_action);
+
+      let actionText = translated || humanActionText || actionCode || "Unknown action";
+
+      if (actionCode === "ACTION6") {
+        const xRaw = action.action_data && action.action_data.x !== undefined
+          ? action.action_data.x
+          : decision && decision.x;
+        const yRaw = action.action_data && action.action_data.y !== undefined
+          ? action.action_data.y
+          : decision && decision.y;
+        const x = Number.isFinite(Number(xRaw)) ? Number(xRaw) : null;
+        const y = Number.isFinite(Number(yRaw)) ? Number(yRaw) : null;
+        if (x !== null && y !== null) {
+          actionText = `${actionText} (x=${x}, y=${y})`;
+        }
+      }
+
+      return actionText;
+    }
+
+    function summarizeFrameReasoning(action) {
+      const decision = getDecisionPayload(action.reasoning);
+      const reasoningText =
+        asText(decision && decision.reasoning) ||
+        asText(action.reasoning && action.reasoning.analysis) ||
+        asText(action.action_data && action.action_data.reasoning) ||
+        asText(action.reasoning);
+
+      if (reasoningText) return reasoningText;
+      return "No reasoning recorded for this move.";
+    }
+
+    function toPrettyJSON(value) {
+      if (value === null || value === undefined) return "";
+      if (typeof value === "string") return value;
+      try {
+        return JSON.stringify(value, null, 2);
+      } catch (_) {
+        return String(value);
+      }
+    }
+
+    function summarizeFrameMemory(action) {
+      const memoryText = asText(action.memory_prompt);
+      if (memoryText) return memoryText;
+      return "No memory snapshot captured for this move.";
+    }
+
+    function summarizeFrameModelInput(action) {
+      const modelCalls = Array.isArray(action.model_calls) ? action.model_calls : [];
+      if (!modelCalls.length) {
+        return "No model input captured for this move.";
+      }
+      return modelCalls.map((call, idx) => {
+        const stepName = asText(call && call.step_name) || `call_${idx + 1}`;
+        const messages = call && call.messages !== undefined ? call.messages : null;
+        return `[${idx + 1}] ${stepName}\n${toPrettyJSON(messages)}`;
+      }).join("\n\n---\n\n");
+    }
+
+    function summarizeFrameModelOutput(action) {
+      const modelCalls = Array.isArray(action.model_calls) ? action.model_calls : [];
+      if (!modelCalls.length) {
+        return "No model output captured for this move.";
+      }
+      return modelCalls.map((call, idx) => {
+        const stepName = asText(call && call.step_name) || `call_${idx + 1}`;
+        const responseText = call && call.response !== undefined ? call.response : null;
+        return `[${idx + 1}] ${stepName}\n${toPrettyJSON(responseText)}`;
+      }).join("\n\n---\n\n");
+    }
+
+    function setDetailPanel(actionText, reasoningText, memoryText, modelInputText, modelOutputText) {
+      els.detailAction.textContent = actionText;
+      els.detailReasoning.textContent = reasoningText;
+      els.detailMemory.textContent = memoryText;
+      els.detailModelInput.textContent = modelInputText;
+      els.detailModelOutput.textContent = modelOutputText;
+    }
+
+    function renderCards(summary, runId) {
+      const overall = (summary && summary.overall_stats) || {};
+      els.cards.innerHTML = [
+        ["Run", runId || "-"],
+        ["Executions", fmtInt(summary.total_executions || 0)],
+        ["Wins", fmtInt(overall.wins || 0)],
+        ["Avg Score", fmtFloat(overall.avg_score || 0, 2)],
+        ["Total Cost", "$" + fmtFloat(overall.total_cost || 0, 4)],
+        ["Total Tokens", fmtInt(overall.total_tokens || 0)]
+      ].map(([k, v]) => `
+        <div class="card">
+          <div class="k">${k}</div>
+          <div class="v">${v}</div>
+        </div>
+      `).join("");
+    }
+
+    function filteredRows() {
+      const q = (els.search.value || "").toLowerCase().trim();
+      const sf = els.stateFilter.value;
+      return state.results.filter((r) => {
+        if (sf && r.final_state !== sf) return false;
+        if (!q) return true;
+        const hay = `${r.game_id} ${r.config} ${r.file}`.toLowerCase();
+        return hay.includes(q);
+      });
+    }
+
+    function renderRows() {
+      const rows = filteredRows();
+      els.countRow.textContent = `${rows.length} / ${state.results.length} rows shown`;
+      els.rows.innerHTML = rows.map((r, idx) => `
+        <tr data-idx="${idx}" class="${
+          state.selectedFile === r.file ||
+          (state.selectedKey && state.selectedKey === `${r.game_id}||${r.config}`)
+            ? "active"
+            : ""
+        }">
+          <td>${r.game_id || ""}</td>
+          <td>${r.config || ""}${r.is_live ? " <span class='small muted'>(live)</span>" : ""}</td>
+          <td><span class="state ${stateClass(r.final_state)}">${r.final_state || ""}</span></td>
+          <td>${fmtInt(r.final_score)}</td>
+          <td>${fmtInt(r.actions_taken)}</td>
+          <td>${fmtFloat(r.duration_seconds, 2)}</td>
+          <td>${fmtFloat(r.total_cost, 6)}</td>
+          <td>${fmtInt(r.total_tokens)}</td>
+          <td>${r.timestamp || ""}</td>
+          <td>${r.file || ""}</td>
+        </tr>
+      `).join("");
+
+      els.rows.querySelectorAll("tr").forEach((tr) => {
+        tr.addEventListener("click", async () => {
+          const row = rows[Number(tr.dataset.idx)];
+          await loadResultDetail(row);
+        });
+      });
+    }
+
+    function renderRunButtons() {
+      els.runs.innerHTML = state.runs.map((run) => `
+        <button class="run-btn ${state.currentRun === run.run_id ? "active" : ""}" data-run="${run.run_id}">
+          <div><strong>${run.run_id}</strong></div>
+          <div class="small muted">${run.total_executions ?? "-"} runs, ${run.total_games ?? "-"} games</div>
+        </button>
+      `).join("");
+
+      els.runs.querySelectorAll(".run-btn").forEach((btn) => {
+        btn.addEventListener("click", () => loadRun(btn.dataset.run));
+      });
+    }
+
+    function stopAutoRefresh() {
+      if (state.refreshTimer) {
+        clearInterval(state.refreshTimer);
+        state.refreshTimer = null;
+      }
+    }
+
+    function startAutoRefresh() {
+      stopAutoRefresh();
+      state.refreshTimer = setInterval(async () => {
+        if (!state.currentRun) return;
+        if (!state.hasLiveRows) return;
+        try {
+          await refreshRunData({ refreshSelectedDetail: true });
+        } catch (_) {
+          // Keep UI responsive even if a single poll fails.
+        }
+      }, 2500);
+    }
+
+    function stopPlayback() {
+      if (state.playbackTimer) {
+        clearInterval(state.playbackTimer);
+        state.playbackTimer = null;
+      }
+      els.playBtn.textContent = "Play";
+    }
+
+    function getGridFromFrames(framesValue) {
+      if (!Array.isArray(framesValue) || framesValue.length === 0) return null;
+      const first = framesValue[0];
+      if (Array.isArray(first) && Array.isArray(first[0])) return first;
+      if (Array.isArray(framesValue[0]) && typeof framesValue[0][0] === "number") return framesValue;
+      return null;
+    }
+
+    function buildPlaybackFrames(result) {
+      const actions = Array.isArray(result.actions) ? result.actions : [];
+      const out = [];
+      let previousGrid = null;
+      for (const action of actions) {
+        const before = getGridFromFrames(action.frames_before) || previousGrid;
+        const after = getGridFromFrames(action.frames_after) || before || previousGrid;
+        const actionNum = action.action_num === undefined || action.action_num === null
+          ? "?"
+          : action.action_num;
+        const translatedAction = summarizeFrameAction(action);
+        const actionCode = normalizeActionCode(action.action);
+        let clickPos = null;
+        if (actionCode === "ACTION6") {
+          const xRaw = action.action_data && action.action_data.x !== undefined
+            ? action.action_data.x
+            : null;
+          const yRaw = action.action_data && action.action_data.y !== undefined
+            ? action.action_data.y
+            : null;
+          const x = Number.isFinite(Number(xRaw)) ? Number(xRaw) : null;
+          const y = Number.isFinite(Number(yRaw)) ? Number(yRaw) : null;
+          if (x !== null && y !== null) {
+            clickPos = { x, y };
+          }
+        }
+        out.push({
+          label: `#${actionNum} ${translatedAction}`,
+          action_num: action.action_num,
+          action: action.action,
+          result_state: action.result_state || "IN_PROGRESS",
+          result_score: action.result_score === undefined || action.result_score === null
+            ? "?"
+            : action.result_score,
+          inputGrid: before || after,
+          outputGrid: after || before,
+          clickPos: clickPos,
+          detailAction: translatedAction,
+          detailReasoning: summarizeFrameReasoning(action),
+          detailMemory: summarizeFrameMemory(action),
+          detailModelInput: summarizeFrameModelInput(action),
+          detailModelOutput: summarizeFrameModelOutput(action),
+        });
+        if (after || before) {
+          previousGrid = after || before || previousGrid;
+        }
+      }
+      return out;
+    }
+
+    function drawClickArrow(ctx, x, y, cell, cols, rows) {
+      const clampedX = Math.max(0, Math.min(cols - 1, Math.round(x)));
+      const clampedY = Math.max(0, Math.min(rows - 1, Math.round(y)));
+      const cx = clampedX * cell + cell / 2;
+      const cy = clampedY * cell + cell / 2;
+
+      const sx = Math.max(cell * 0.75, cx - cell * 2.8);
+      const sy = Math.max(cell * 0.75, cy - cell * 2.8);
+
+      ctx.save();
+      ctx.strokeStyle = "#dc2626";
+      ctx.fillStyle = "#dc2626";
+      ctx.lineWidth = Math.max(3, cell * 0.24);
+      ctx.lineCap = "round";
+
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(cx, cy);
+      ctx.stroke();
+
+      const angle = Math.atan2(cy - sy, cx - sx);
+      const head = Math.max(6, cell * 0.55);
+      const a1 = angle + Math.PI * 0.8;
+      const a2 = angle - Math.PI * 0.8;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + Math.cos(a1) * head, cy + Math.sin(a1) * head);
+      ctx.lineTo(cx + Math.cos(a2) * head, cy + Math.sin(a2) * head);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.strokeStyle = "#dc2626";
+      ctx.lineWidth = Math.max(2, cell * 0.16);
+      ctx.strokeRect(clampedX * cell + 0.5, clampedY * cell + 0.5, cell - 1, cell - 1);
+      ctx.restore();
+    }
+
+    function drawGrid(canvas, grid, overlay = null) {
+      const ctx = canvas.getContext("2d");
+      if (!grid || !Array.isArray(grid) || grid.length === 0 || !Array.isArray(grid[0])) {
+        canvas.width = 420;
+        canvas.height = 420;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#f8f6f2";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#6b7280";
+        ctx.font = "14px sans-serif";
+        ctx.fillText("No frame data", 12, 22);
+        return;
+      }
+
+      const rows = grid.length;
+      const cols = grid[0].length;
+      const container = canvas.parentElement;
+      const maxWidth = Math.max(260, Math.min(820, (container ? container.clientWidth : 520) - 18));
+      const maxHeight = 620;
+      const cell = Math.max(4, Math.min(30, Math.floor(Math.min(maxWidth / cols, maxHeight / rows))));
+      const width = cols * cell;
+      const height = rows * cell;
+
+      canvas.width = width;
+      canvas.height = height;
+      ctx.clearRect(0, 0, width, height);
+
+      for (let r = 0; r < rows; r++) {
+        for (let c = 0; c < cols; c++) {
+          const v = Number(grid[r][c] || 0);
+          ctx.fillStyle = ARC_COLORS[v] || "#111827";
+          ctx.fillRect(c * cell, r * cell, cell, cell);
+        }
+      }
+
+      if (cell >= 9) {
+        ctx.strokeStyle = "rgba(255,255,255,0.09)";
+        ctx.lineWidth = 1;
+        for (let x = 0; x <= cols; x++) {
+          ctx.beginPath();
+          ctx.moveTo(x * cell + 0.5, 0);
+          ctx.lineTo(x * cell + 0.5, height);
+          ctx.stroke();
+        }
+        for (let y = 0; y <= rows; y++) {
+          ctx.beginPath();
+          ctx.moveTo(0, y * cell + 0.5);
+          ctx.lineTo(width, y * cell + 0.5);
+          ctx.stroke();
+        }
+      }
+
+      if (overlay && overlay.type === "click" && overlay.pos) {
+        drawClickArrow(ctx, overlay.pos.x, overlay.pos.y, cell, cols, rows);
+      }
+    }
+
+    function renderPlaybackFrame() {
+      const n = state.playbackFrames.length;
+      if (!n) {
+        drawGrid(els.inputCanvas, null);
+        drawGrid(els.outputCanvas, null);
+        els.playbackMeta.textContent = "No move-by-move frame data available for this result.";
+        els.frameSlider.min = "0";
+        els.frameSlider.max = "0";
+        els.frameSlider.value = "0";
+        setDetailPanel(
+          "Select a move to inspect action.",
+          "Reasoning details will appear here.",
+          "Memory snapshot will appear here.",
+          "Model input will appear here.",
+          "Model output will appear here."
+        );
+        return;
+      }
+
+      const idx = Math.max(0, Math.min(state.playbackIndex, n - 1));
+      state.playbackIndex = idx;
+      const frame = state.playbackFrames[idx];
+      els.frameSlider.min = "0";
+      els.frameSlider.max = String(n - 1);
+      els.frameSlider.value = String(idx);
+
+      const inputOverlay =
+        frame.action === "ACTION6" && frame.clickPos
+          ? { type: "click", pos: frame.clickPos }
+          : null;
+      drawGrid(els.inputCanvas, frame.inputGrid, inputOverlay);
+      drawGrid(els.outputCanvas, frame.outputGrid);
+      els.playbackMeta.textContent =
+        `Move ${idx + 1}/${n} | ${frame.label}`;
+      setDetailPanel(
+        frame.detailAction,
+        frame.detailReasoning,
+        frame.detailMemory,
+        frame.detailModelInput,
+        frame.detailModelOutput
+      );
+    }
+
+    function stepPlayback(delta) {
+      if (!state.playbackFrames.length) return;
+      state.playbackIndex = Math.max(
+        0,
+        Math.min(state.playbackFrames.length - 1, state.playbackIndex + delta)
+      );
+      renderPlaybackFrame();
+    }
+
+    function togglePlayback() {
+      if (!state.playbackFrames.length) return;
+      if (state.playbackTimer) {
+        stopPlayback();
+        return;
+      }
+
+      if (state.playbackIndex >= state.playbackFrames.length - 1) {
+        state.playbackIndex = 0;
+      }
+      const delay = 250;
+      els.playBtn.textContent = "Pause";
+      state.playbackTimer = setInterval(() => {
+        if (state.playbackIndex >= state.playbackFrames.length - 1) {
+          stopPlayback();
+          return;
+        }
+        state.playbackIndex += 1;
+        renderPlaybackFrame();
+      }, delay);
+    }
+
+    function downloadCurrentGif() {
+      if (!state.currentRun || !state.selectedFile) {
+        els.playbackMeta.textContent = "Select a result row first to download a GIF.";
+        return;
+      }
+      const url =
+        `/api/run/${encodeURIComponent(state.currentRun)}/gif?file=${encodeURIComponent(state.selectedFile)}`;
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+
+    async function loadResultDetail(row, options = {}) {
+      const preservePlayback = Boolean(options.preservePlayback);
+      let playbackRatio = 0;
+      if (preservePlayback && state.playbackFrames.length > 1) {
+        playbackRatio = state.playbackIndex / Math.max(1, state.playbackFrames.length - 1);
+      }
+
+      stopPlayback();
+      state.selectedFile = row.file;
+      state.selectedKey = `${row.game_id}||${row.config}`;
+      state.selectedRowVersion = rowVersion(row);
+      renderRows();
+
+      try {
+        const url =
+          `/api/run/${encodeURIComponent(state.currentRun)}/result?view=playback&file=${encodeURIComponent(row.file)}`;
+        const payload = await getJSON(url);
+        state.selectedResult = payload.result || null;
+        state.playbackFrames = buildPlaybackFrames(state.selectedResult || {});
+        if (preservePlayback && state.playbackFrames.length > 1) {
+          state.playbackIndex = Math.round(playbackRatio * (state.playbackFrames.length - 1));
+        } else {
+          state.playbackIndex = 0;
+        }
+        renderPlaybackFrame();
+      } catch (err) {
+        state.selectedResult = null;
+        state.playbackFrames = [];
+        renderPlaybackFrame();
+        setDetailPanel(
+          "Failed to load action details.",
+          `Failed to load reasoning details: ${String(err)}`,
+          `Failed to load memory details: ${String(err)}`,
+          `Failed to load model input details: ${String(err)}`,
+          `Failed to load model output details: ${String(err)}`
+        );
+      }
+    }
+
+    async function refreshRunData(options = {}) {
+      const refreshSelectedDetail = Boolean(options.refreshSelectedDetail);
+      if (!state.currentRun) return;
+      const [summary, resultsPayload] = await Promise.all([
+        getJSON(`/api/run/${encodeURIComponent(state.currentRun)}/summary`),
+        getJSON(`/api/run/${encodeURIComponent(state.currentRun)}/results`)
+      ]);
+
+      state.results = resultsPayload.results || [];
+      state.hasLiveRows = state.results.some((r) => Boolean(r.is_live));
+      renderCards(summary, state.currentRun);
+      renderRows();
+
+      if (refreshSelectedDetail && state.selectedKey) {
+        const selectedRow =
+          state.results.find((r) => `${r.game_id}||${r.config}` === state.selectedKey) || null;
+        if (selectedRow) {
+          const fileChanged = state.selectedFile !== selectedRow.file;
+          const versionChanged = state.selectedRowVersion !== rowVersion(selectedRow);
+          if (fileChanged || versionChanged) {
+            await loadResultDetail(selectedRow, { preservePlayback: true });
+          }
+          return;
+        }
+        state.selectedFile = null;
+        state.selectedKey = null;
+        state.selectedRowVersion = null;
+        state.selectedResult = null;
+        state.playbackFrames = [];
+        state.playbackIndex = 0;
+        renderRows();
+      }
+      if (!state.selectedKey) {
+        renderPlaybackFrame();
+      }
+    }
+
+    async function loadRun(runId) {
+      stopPlayback();
+      state.currentRun = runId;
+      state.selectedFile = null;
+      state.selectedKey = null;
+      state.selectedRowVersion = null;
+      state.selectedResult = null;
+      state.playbackFrames = [];
+      state.playbackIndex = 0;
+      state.hasLiveRows = false;
+      renderRunButtons();
+      els.titleRow.textContent = `Run: ${runId}`;
+
+      await refreshRunData({ refreshSelectedDetail: false });
+      const initialRows = filteredRows();
+      if (initialRows.length > 0) {
+        await loadResultDetail(initialRows[0]);
+      } else {
+        renderPlaybackFrame();
+      }
+      startAutoRefresh();
+    }
+
+    async function init() {
+      try {
+        const payload = await getJSON("/api/runs");
+        state.runs = payload.runs || [];
+        renderRunButtons();
+        if (state.runs.length > 0) {
+          await loadRun(state.runs[0].run_id);
+        } else {
+          stopAutoRefresh();
+          els.titleRow.textContent = "No runs found in results/";
+          renderCards({ total_executions: 0, overall_stats: {} }, "-");
+          renderRows();
+          renderPlaybackFrame();
+        }
+      } catch (err) {
+        stopAutoRefresh();
+        els.titleRow.textContent = "Failed to load runs";
+        setDetailPanel(
+          "Failed to load action details.",
+          `Failed to load reasoning details: ${String(err)}`,
+          `Failed to load memory details: ${String(err)}`,
+          `Failed to load model input details: ${String(err)}`,
+          `Failed to load model output details: ${String(err)}`
+        );
+      }
+    }
+
+    els.search.addEventListener("input", renderRows);
+    els.stateFilter.addEventListener("change", renderRows);
+    els.prevBtn.addEventListener("click", () => {
+      stopPlayback();
+      stepPlayback(-1);
+    });
+    els.nextBtn.addEventListener("click", () => {
+      stopPlayback();
+      stepPlayback(1);
+    });
+    els.playBtn.addEventListener("click", togglePlayback);
+    els.downloadGifBtn.addEventListener("click", downloadCurrentGif);
+    els.frameSlider.addEventListener("input", () => {
+      stopPlayback();
+      state.playbackIndex = Number(els.frameSlider.value || 0);
+      renderPlaybackFrame();
+    });
+    window.addEventListener("resize", () => renderPlaybackFrame());
+    window.addEventListener("beforeunload", () => {
+      stopPlayback();
+      stopAutoRefresh();
+    });
+
+    init();
+  </script>
+</body>
+</html>

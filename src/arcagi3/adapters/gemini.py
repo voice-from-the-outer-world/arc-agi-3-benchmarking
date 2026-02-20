@@ -3,7 +3,7 @@ import json
 import logging
 import os
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from dotenv import load_dotenv
 from google import genai
@@ -278,6 +278,38 @@ class GeminiAdapter(ProviderAdapter):
 
         config_params = self.generation_config_dict.copy()
 
+        # Remove harness-internal params that are not provider API params.
+        for internal_key in self.INTERNAL_API_PARAMS:
+            config_params.pop(internal_key, None)
+
+        # Normalize "reasoning" config into Gemini's thinking_config.
+        reasoning = config_params.pop("reasoning", None)
+        if reasoning is not None:
+            thinking_config = dict(config_params.get("thinking_config") or {})
+            if isinstance(reasoning, bool):
+                if reasoning:
+                    thinking_config.setdefault("include_thoughts", True)
+            elif isinstance(reasoning, dict):
+                if "enabled" in reasoning:
+                    thinking_config["include_thoughts"] = bool(reasoning.get("enabled"))
+                if "include_thoughts" in reasoning:
+                    thinking_config["include_thoughts"] = bool(reasoning.get("include_thoughts"))
+                budget = reasoning.get("budget_tokens", reasoning.get("thinking_budget"))
+                if budget is not None:
+                    try:
+                        thinking_config["thinking_budget"] = int(budget)
+                    except (TypeError, ValueError):
+                        logger.warning("Invalid Gemini reasoning budget value: %r", budget)
+            if thinking_config:
+                config_params["thinking_config"] = thinking_config
+
+        # Drop unsupported config keys to avoid GenerateContentConfig validation errors.
+        valid_config_keys = set(types.GenerateContentConfig.model_fields.keys())
+        invalid_keys = [k for k in config_params.keys() if k not in valid_config_keys]
+        if invalid_keys:
+            logger.warning("Ignoring unsupported Gemini config key(s): %s", ", ".join(invalid_keys))
+            config_params = {k: v for k, v in config_params.items() if k in valid_config_keys}
+
         # Combine system messages and add to config if not already present
         if system_messages and "system_instruction" not in config_params:
             system_content = "\n".join(system_messages)
@@ -294,7 +326,7 @@ class GeminiAdapter(ProviderAdapter):
             logger.error(f"Error in chat_completion with google.genai: {e}")
             if hasattr(e, "response") and e.response:
                 logger.error(f"API Error details: {e.response}")
-            return None
+            raise
 
     def extract_json_from_response(self, input_response: str) -> Optional[List[List[int]]]:
         prompt = f"""
@@ -347,6 +379,44 @@ class GeminiAdapter(ProviderAdapter):
             return None
 
     def extract_usage(self, response):
+        def _to_int(value: Any) -> int:
+            try:
+                return int(value or 0)
+            except (TypeError, ValueError):
+                return 0
+
+        def _extract_usage_dict(resp: Any) -> Dict[str, Any]:
+            usage_dict: Dict[str, Any] = {}
+            usage_obj = getattr(resp, "usage_metadata", None)
+            if usage_obj is not None:
+                for key in (
+                    "prompt_token_count",
+                    "tool_use_prompt_token_count",
+                    "candidates_token_count",
+                    "thoughts_token_count",
+                    "total_token_count",
+                ):
+                    if hasattr(usage_obj, key):
+                        usage_dict[key] = getattr(usage_obj, key)
+                if usage_dict:
+                    return usage_dict
+
+            # Fallback to model_dump()/dict-like structures.
+            payload = None
+            if hasattr(resp, "model_dump"):
+                try:
+                    payload = resp.model_dump()
+                except Exception:
+                    payload = None
+            if payload is None and isinstance(resp, dict):
+                payload = resp
+
+            if isinstance(payload, dict):
+                usage_dict = payload.get("usage_metadata") or payload.get("usageMetadata") or {}
+                if isinstance(usage_dict, dict):
+                    return usage_dict
+            return {}
+
         # Handle consumed streams
         if isinstance(response, StreamResponse):
             return response.prompt_tokens, response.completion_tokens, 0
@@ -357,12 +427,16 @@ class GeminiAdapter(ProviderAdapter):
             # Return 0,0,0 for now - usage will need to be tracked differently
             return 0, 0, 0
 
-        # Gemini format (no separate reasoning tokens)
-        if hasattr(response, "usage_metadata") and response.usage_metadata:
-            prompt_tokens = getattr(response.usage_metadata, "prompt_token_count", 0) or 0
-            completion_tokens = getattr(response.usage_metadata, "candidates_token_count", 0) or 0
-            return prompt_tokens, completion_tokens, 0
-        return 0, 0, 0
+        usage = _extract_usage_dict(response)
+        if not usage:
+            return 0, 0, 0
+
+        prompt_tokens = _to_int(usage.get("prompt_token_count")) + _to_int(
+            usage.get("tool_use_prompt_token_count")
+        )
+        completion_tokens = _to_int(usage.get("candidates_token_count"))
+        reasoning_tokens = _to_int(usage.get("thoughts_token_count"))
+        return prompt_tokens, completion_tokens, reasoning_tokens
 
     def extract_content(self, response):
         if hasattr(response, "text"):

@@ -331,7 +331,8 @@ def generate_summary(timestamp_dir: str) -> Dict[str, Any]:
         pass
 
     models_tested = set()
-    all_results = []
+    # Keep one canonical result per (game_id, config), preferring final files over live files.
+    results_by_key: Dict[tuple[str, str], Dict[str, Any]] = {}
     latest_timestamp = None
 
     for item in os.listdir(timestamp_dir):
@@ -344,26 +345,58 @@ def generate_summary(timestamp_dir: str) -> Dict[str, Any]:
                     try:
                         with open(file_path, "r") as f:
                             result_data = json.load(f)
-                            all_results.append(result_data)
-                            config = result_data.get("config", "unknown")
-                            models_tested.add(config)
+                            config = str(result_data.get("config", "unknown"))
+                            canonical_game_id = str(result_data.get("game_id", game_id))
+                            key = (canonical_game_id, config)
 
-                            timestamp_str = result_data.get("timestamp")
-                            if timestamp_str:
-                                try:
-                                    result_dt = datetime.fromisoformat(
-                                        timestamp_str.replace("Z", "+00:00")
-                                    )
-                                    if latest_timestamp is None or result_dt > latest_timestamp:
-                                        latest_timestamp = result_dt
-                                except Exception:
-                                    pass
-
-                            if config not in summary["games_by_model"]:
-                                summary["games_by_model"][config] = []
-                            summary["games_by_model"][config].append(game_id)
+                            is_live = filename.endswith("_live.json")
+                            ts = str(result_data.get("timestamp") or "")
+                            existing = results_by_key.get(key)
+                            if existing is None:
+                                results_by_key[key] = {
+                                    "data": result_data,
+                                    "is_live": is_live,
+                                    "timestamp": ts,
+                                }
+                            else:
+                                # Prefer final file over live; otherwise keep latest timestamp.
+                                if existing["is_live"] and not is_live:
+                                    results_by_key[key] = {
+                                        "data": result_data,
+                                        "is_live": is_live,
+                                        "timestamp": ts,
+                                    }
+                                elif existing["is_live"] == is_live and ts >= existing["timestamp"]:
+                                    results_by_key[key] = {
+                                        "data": result_data,
+                                        "is_live": is_live,
+                                        "timestamp": ts,
+                                    }
                     except Exception:
                         continue
+
+    all_results = [entry["data"] for entry in results_by_key.values()]
+
+    # Build model/game indices and latest timestamp from canonical rows only.
+    games_by_model_sets: Dict[str, set[str]] = {}
+    for result_data in all_results:
+        config = str(result_data.get("config", "unknown"))
+        models_tested.add(config)
+        canonical_game_id = str(result_data.get("game_id", "unknown"))
+        games_by_model_sets.setdefault(config, set()).add(canonical_game_id)
+
+        timestamp_str = result_data.get("timestamp")
+        if timestamp_str:
+            try:
+                result_dt = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+                if latest_timestamp is None or result_dt > latest_timestamp:
+                    latest_timestamp = result_dt
+            except Exception:
+                pass
+
+    summary["games_by_model"] = {
+        model: sorted(list(game_ids)) for model, game_ids in games_by_model_sets.items()
+    }
 
     summary["models_tested"] = sorted(list(models_tested))
     summary["total_games"] = len(

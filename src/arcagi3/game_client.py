@@ -7,11 +7,14 @@ import logging
 import os
 from typing import Any, Dict, List, Optional
 
+from dotenv import load_dotenv
 from requests import Session
 
 from arcagi3.utils.retry import retry_with_exponential_backoff
 
 logger = logging.getLogger(__name__)
+
+load_dotenv()
 
 
 class GameClient:

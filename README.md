@@ -135,6 +135,49 @@ uv run python -m arcagi3.runner \
   --max_actions 3
 ```
 
+## State-Memory Agent
+
+Use the state-memory agent when you want a state-only policy loop with persistent scratchpad memory.
+
+Run with the parallel harness:
+
+```bash
+uv run python cli/run_all.py \
+  --agent state-memory \
+  --game_list_file games.txt \
+  --model_configs gemini-3-1-pro-openrouter \
+  --num_plays 1 \
+  --max_actions 50
+```
+
+How it works (per turn):
+- Model input contains only: `MEMORY`, `PREVIOUS_STATE`, `PREVIOUS_ACTION`, `CURRENT_STATE`, `AVAILABLE_ACTIONS`
+- Memory is persistent across turns and overwrite-all (the model must return the full updated memory each step)
+- States are provided as text grids
+- No image/vision input is used by `state-memory` (it is text-grid only)
+- The model returns one JSON action plus updated `memory`
+
+Implementation and prompts:
+- `src/arcagi3/adcr_agent/state_memory_agent.py`
+- `src/arcagi3/adcr_agent/prompts/state_memory_system.prompt`
+- `src/arcagi3/adcr_agent/prompts/state_memory_user.prompt`
+
+## Results Web Viewer
+
+Start the local viewer:
+
+```bash
+uv run python cli/results_viewer.py --results-root results --port 8020
+```
+
+Then open:
+- `http://127.0.0.1:8020`
+
+What it shows:
+- Run summary and per-game result table
+- Left panel playback for frames
+- Right panel details per action (action, reasoning, memory, full model input/output)
+
 ## Scorecards
 
 When you run a benchmark, a scorecard is saved on the ARC server.

@@ -4,13 +4,17 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 import tempfile
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+
 ARC3Tester = None
+ADCRAgent = None
+StateMemoryAgent = None
 AsyncRequestRateLimiter = None
 generate_execution_map = None
 generate_summary = None
@@ -29,6 +33,8 @@ def _ensure_project_paths() -> None:
 
 def _load_arcagi3() -> None:
     global ARC3Tester
+    global ADCRAgent
+    global StateMemoryAgent
     global AsyncRequestRateLimiter
     global generate_execution_map
     global generate_summary
@@ -41,6 +47,8 @@ def _load_arcagi3() -> None:
 
     _ensure_project_paths()
     from arcagi3.arc3tester import ARC3Tester as _ARC3Tester
+    from arcagi3.adcr_agent import ADCRAgent as _ADCRAgent
+    from arcagi3.adcr_agent import StateMemoryAgent as _StateMemoryAgent
     from arcagi3.utils import AsyncRequestRateLimiter as _AsyncRequestRateLimiter
     from arcagi3.utils import generate_execution_map as _generate_execution_map
     from arcagi3.utils import generate_summary as _generate_summary
@@ -51,6 +59,8 @@ def _load_arcagi3() -> None:
     )
 
     ARC3Tester = _ARC3Tester
+    ADCRAgent = _ADCRAgent
+    StateMemoryAgent = _StateMemoryAgent
     AsyncRequestRateLimiter = _AsyncRequestRateLimiter
     generate_execution_map = _generate_execution_map
     generate_summary = _generate_summary
@@ -76,6 +86,57 @@ def get_model_config(config_name: str):
     return MODEL_CONFIG_CACHE[config_name]
 
 
+def _safe_name(value: str) -> str:
+    safe = re.sub(r'[/\\:*?"<>|\x00]', "_", str(value or "unknown"))
+    safe = safe.strip(" .")
+    safe = re.sub(r"_+", "_", safe)
+    return safe or "unknown"
+
+
+def _resolve_game_ids(game_ids: List[str]) -> List[str]:
+    """
+    Resolve shorthand game IDs (e.g. "ls20") to full server game IDs
+    (e.g. "ls20-016295f7601e") when possible.
+    """
+    if not game_ids:
+        return game_ids
+
+    _load_arcagi3()
+    from arcagi3.game_client import GameClient
+
+    # Fetch once and build a map from short prefix -> full IDs.
+    available_games = GameClient().list_games()
+    prefix_to_full: Dict[str, List[str]] = {}
+    for game in available_games:
+        full_id = game.get("game_id")
+        if not full_id or not isinstance(full_id, str):
+            continue
+        prefix = full_id.split("-", 1)[0]
+        prefix_to_full.setdefault(prefix, []).append(full_id)
+
+    resolved: List[str] = []
+    for raw_id in game_ids:
+        if "-" in raw_id:
+            resolved.append(raw_id)
+            continue
+
+        candidates = prefix_to_full.get(raw_id, [])
+        if len(candidates) == 1:
+            resolved.append(candidates[0])
+        elif len(candidates) > 1:
+            logger.warning(
+                "Multiple full IDs found for shorthand '%s'; using first: %s",
+                raw_id,
+                candidates[0],
+            )
+            resolved.append(candidates[0])
+        else:
+            # Keep original and let downstream API error surface clearly.
+            resolved.append(raw_id)
+
+    return resolved
+
+
 def get_or_create_rate_limiter(provider_name: str, all_provider_limits: Dict) -> Any:
     _load_arcagi3()
     if provider_name not in PROVIDER_RATE_LIMITERS:
@@ -99,6 +160,7 @@ def get_or_create_rate_limiter(provider_name: str, all_provider_limits: Dict) ->
 async def run_single_game_wrapper(
     config_name: str,
     game_id: str,
+    agent_name: str,
     limiter: AsyncRequestRateLimiter,
     timestamp_dir: str,
     overwrite_results: bool,
@@ -112,6 +174,17 @@ async def run_single_game_wrapper(
     _load_arcagi3()
 
     def _synchronous_game_execution():
+        safe_game = _safe_name(game_id)
+        safe_config = _safe_name(config_name)
+        game_dir = os.path.join(timestamp_dir, safe_game)
+        os.makedirs(game_dir, exist_ok=True)
+        live_result_file = os.path.join(game_dir, f"{safe_game}_{safe_config}_live.json")
+
+        if agent_name == "state-memory":
+            agent_class = StateMemoryAgent
+        else:
+            agent_class = ADCRAgent
+
         tester = ARC3Tester(
             config=config_name,
             save_results_dir=None,
@@ -122,6 +195,10 @@ async def run_single_game_wrapper(
             num_plays=num_plays,
             max_episode_actions=max_episode_actions,
             use_vision=use_vision,
+            checkpoint_dir=os.path.join(timestamp_dir, ".checkpoint"),
+            live_result_file=live_result_file,
+            live_result_flush_frequency=1,
+            agent_class=agent_class,
         )
         result = tester.play_game(game_id)
         if result:
@@ -142,6 +219,7 @@ async def run_single_game_wrapper(
 async def main(
     game_list_file: Optional[str],
     model_configs_to_test: List[str],
+    agent_name: str,
     results_root: str,
     overwrite_results: bool,
     max_actions: int,
@@ -163,6 +241,7 @@ async def main(
         if not game_ids:
             logger.error(f"No game IDs found in {game_list_file}")
             return 1
+        game_ids = _resolve_game_ids(game_ids)
     except FileNotFoundError:
         logger.error(f"Game list file not found: {game_list_file}")
         return 1
@@ -191,6 +270,7 @@ async def main(
                 run_single_game_wrapper(
                     config_name,
                     game_id,
+                    agent_name,
                     limiter,
                     timestamp_dir,
                     overwrite_results,
@@ -234,6 +314,7 @@ async def main(
     logger.info("\nExecution Info:")
     logger.info(f"   • Started: {summary.get('execution_start', 'N/A') if summary else 'N/A'}")
     logger.info(f"   • Duration: {total_duration:.2f}s")
+    logger.info(f"   • Agent: {agent_name}")
     logger.info(f"   • Models tested: {', '.join(model_configs_to_test)}")
     logger.info(f"   • Games: {summary.get('total_games', 0) if summary else 0}")
     logger.info(f"   • Total executions: {successful_runs}/{len(results)}")
@@ -294,6 +375,13 @@ if __name__ == "__main__":
         required=False,
         help="Comma-separated list of game IDs (e.g., 'ls20-016295f7601e,ls20-fa137e247ce6'). "
         "Alternative to --game_list_file.",
+    )
+    parser.add_argument(
+        "--agent",
+        type=str,
+        default="adcr",
+        choices=["adcr", "state-memory"],
+        help="Agent to run: 'adcr' (default) or 'state-memory' (unbounded memory, state-only input).",
     )
     parser.add_argument(
         "--model_configs",
@@ -417,6 +505,7 @@ if __name__ == "__main__":
             main(
                 game_list_file=game_list_file,
                 model_configs_to_test=model_configs_list,
+                agent_name=args.agent,
                 results_root=args.results_root,
                 overwrite_results=args.overwrite_results,
                 max_actions=args.max_actions,

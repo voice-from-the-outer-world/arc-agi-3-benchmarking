@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from arcagi3.adcr_agent import ADCRAgent
+from arcagi3.adcr_agent import ADCRAgent, StateMemoryAgent
 
 definition = {
     "name": "adcr",
@@ -8,6 +8,12 @@ definition = {
     "agent_class": ADCRAgent,
 }
 
-agents = [definition]
+state_memory_definition = {
+    "name": "state-memory",
+    "description": "Unbounded-memory agent with state-only turn input",
+    "agent_class": StateMemoryAgent,
+}
 
-__all__ = ["definition", "agents"]
+agents = [definition, state_memory_definition]
+
+__all__ = ["definition", "state_memory_definition", "agents"]

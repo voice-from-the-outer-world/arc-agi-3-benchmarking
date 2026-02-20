@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import copy
+import json
 import logging
+import os
 import time
 import traceback
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from threadsafe_datastore import Datastore
@@ -57,6 +60,8 @@ class MultimodalAgent(ABC):
         max_episode_actions: int = 0,
         checkpoint_frequency: int = 1,
         checkpoint_dir: Optional[str] = None,
+        live_result_file: Optional[str] = None,
+        live_result_flush_frequency: int = 1,
         breakpoints_enabled: bool = False,
         breakpoint_ws_url: str = "ws://localhost:8765/ws",
         breakpoint_schema_path: Optional[str] = None,
@@ -72,6 +77,8 @@ class MultimodalAgent(ABC):
 
         self.checkpoint_frequency = checkpoint_frequency
         self.checkpoint_dir = checkpoint_dir
+        self.live_result_file = live_result_file
+        self.live_result_flush_frequency = max(1, int(live_result_flush_frequency or 1))
 
         self._breakpoints_enabled = breakpoints_enabled
         self._breakpoint_ws_url = breakpoint_ws_url
@@ -124,6 +131,57 @@ class MultimodalAgent(ABC):
         """
         state = self.get_state(context)
         context.save_checkpoint_state(state)
+
+    def _write_live_result(
+        self,
+        *,
+        game_id: str,
+        context: SessionContext,
+        current_score: int,
+        current_state: str,
+        actions: List[GameActionRecord],
+        status: str,
+        error: Optional[str] = None,
+    ) -> None:
+        if not self.live_result_file:
+            return
+
+        start_ts = context.datastore.get("_live_run_start_ts")
+        if start_ts is None:
+            start_ts = time.time()
+            context.datastore["_live_run_start_ts"] = start_ts
+        try:
+            duration_seconds = max(0.0, time.time() - float(start_ts))
+        except (TypeError, ValueError):
+            duration_seconds = 0.0
+
+        payload = {
+            "game_id": game_id,
+            "config": self.config,
+            "final_score": current_score,
+            "final_state": current_state,
+            "actions_taken": int(context.game.action_counter),
+            "duration_seconds": duration_seconds,
+            "total_cost": context.metrics.total_cost.model_dump(),
+            "usage": context.metrics.total_usage.model_dump(),
+            "actions": [action.model_dump(mode="json") for action in actions],
+            "final_memory": None,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "scorecard_url": f"{self.game_client.ROOT_URL}/scorecards/{self.card_id}",
+            "card_id": self.card_id,
+            "live_status": status,
+            "error": error,
+        }
+
+        try:
+            out_path = Path(self.live_result_file)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = out_path.with_suffix(f"{out_path.suffix}.tmp")
+            with tmp_path.open("w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+            os.replace(str(tmp_path), str(out_path))
+        except Exception as exc:
+            logger.warning("Failed writing live result file %s: %s", self.live_result_file, exc)
 
     @abstractmethod
     def step(self, context: SessionContext) -> GameStep:
@@ -380,6 +438,15 @@ class MultimodalAgent(ABC):
             context.set_game_identity(guid=guid)
             context.set_counters(play_action_counter=play_action_counter)
 
+            self._write_live_result(
+                game_id=game_id,
+                context=context,
+                current_score=current_score,
+                current_state=current_state,
+                actions=list(context.history.actions),
+                status="IN_PROGRESS",
+            )
+
             session_result = self._run_session_loop(
                 game_id=game_id, initial_state=state, context=context
             )
@@ -444,6 +511,15 @@ class MultimodalAgent(ABC):
             f"Cost: ${context.metrics.total_cost.total_cost:.4f}"
         )
 
+        self._write_live_result(
+            game_id=best_result.game_id,
+            context=context,
+            current_score=best_result.final_score,
+            current_state=best_result.final_state,
+            actions=list(context.history.actions),
+            status="COMPLETED",
+        )
+
         return best_result
 
     def _run_session_loop(
@@ -488,6 +564,8 @@ class MultimodalAgent(ABC):
                     guid=guid,
                 )
 
+                frames_before = copy.deepcopy(frames)
+
                 cost_before = context.metrics_snapshot()
 
                 step = self.step(context)
@@ -516,9 +594,10 @@ class MultimodalAgent(ABC):
                 guid = state.get("guid", guid)
                 new_score = state.get("levels_completed", current_score)
                 current_state = state.get("state", "IN_PROGRESS")
+                frames_after = copy.deepcopy(state.get("frame", []))
 
                 context.update(
-                    frame_grids=state.get("frame", []),
+                    frame_grids=frames_after,
                     current_score=new_score,
                     current_state=current_state,
                     guid=guid,
@@ -542,6 +621,8 @@ class MultimodalAgent(ABC):
                     reasoning=reasoning_for_api or None,
                     result_score=new_score,
                     result_state=current_state,
+                    frames_before=frames_before,
+                    frames_after=frames_after,
                     cost=action_cost,
                 )
                 play_action_history.append(action_record)
@@ -551,6 +632,19 @@ class MultimodalAgent(ABC):
                 play_action_counter += 1
                 context.set_counters(play_action_counter=play_action_counter)
                 context.set_game_identity(guid=guid)
+
+                if (
+                    self.live_result_file
+                    and new_action_counter % self.live_result_flush_frequency == 0
+                ):
+                    self._write_live_result(
+                        game_id=game_id,
+                        context=context,
+                        current_score=current_score,
+                        current_state=current_state,
+                        actions=list(context.history.actions),
+                        status="IN_PROGRESS",
+                    )
 
                 if self.max_actions > 0 and context.game.action_counter >= self.max_actions:
                     logger.info(
@@ -570,6 +664,15 @@ class MultimodalAgent(ABC):
                     self.save_checkpoint(context)
 
             except Exception as e:
+                self._write_live_result(
+                    game_id=game_id,
+                    context=context,
+                    current_score=current_score,
+                    current_state=current_state,
+                    actions=list(context.history.actions),
+                    status="ERROR",
+                    error=str(e),
+                )
                 trace = traceback.format_exc()
                 payload = errors.build_error_payload(
                     e,
